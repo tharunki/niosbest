@@ -105,8 +105,9 @@ uploadButton.addEventListener('click', async () => {
   if (!/\.pdf$/i.test(file.name) || file.size > 25 * 1024 * 1024) return showToast('Choose a PDF smaller than 25 MB.', 'error');
   uploadButton.disabled = true; uploadButton.textContent = 'Uploading…';
   try {
-    const data = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error('The file could not be read.')); reader.readAsDataURL(file); });
-    const result = await request('/api/admin/files', { method:'POST', body:JSON.stringify({ filename:file.name, data }) });
+    const response = await fetch('/api/admin/files', { method:'POST', headers:{ Accept:'application/json', 'Content-Type':'application/pdf', 'X-Upload-Filename':encodeURIComponent(file.name) }, body:file });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'The PDF could not be uploaded.');
     await loadFiles(result.file); document.querySelector('#fileKey').value = result.file; uploadInput.value = ''; uploadName.textContent = 'Maximum file size: 25 MB.'; showToast('Protected PDF uploaded successfully.');
   } catch (error) { showToast(error.message, 'error'); }
   finally { uploadButton.disabled = false; uploadButton.textContent = 'Upload selected PDF'; }

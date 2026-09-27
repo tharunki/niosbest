@@ -8,3 +8,5 @@ storage/
 papers/
 dist/
 .openai/
+.wrangler/
+.dev.vars

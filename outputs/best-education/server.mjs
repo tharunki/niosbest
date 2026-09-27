@@ -18,7 +18,7 @@ const papersDir = path.join(storageRoot, 'papers');
 const packagedDataDir = path.join(root, 'data');
 const packagedPapersDir = path.join(root, 'papers');
 const port = Number(process.env.PORT || 4173);
-const siteUrl = String(process.env.SITE_URL || 'https://www.besteducation.in').replace(/\/$/, '');
+const siteUrl = String(process.env.SITE_URL || 'https://www.ravitestpapers.in').replace(/\/$/, '');
 const adminPassword = process.env.ADMIN_PASSWORD;
 const downloadSecret = process.env.DOWNLOAD_TOKEN_SECRET;
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
@@ -225,7 +225,16 @@ async function api(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/admin/cards') return json(response, 200, { cards:readCards() });
   if (request.method === 'GET' && url.pathname === '/api/admin/files') return json(response, 200, { files:await pdfFiles() });
   if (request.method === 'POST' && url.pathname === '/api/admin/files') {
-    try { const input = await body(request, Math.ceil(maxPdfBytes * 1.4)); const filename = safePdfFilename(input.filename); const pdf = decodePdfUpload(input.data); const target = path.join(papersDir, filename); const temporary = `${target}.${randomUUID()}.tmp`; await writeFile(temporary, pdf, { flag:'wx' }); await unlink(target).catch(() => {}); await rename(temporary, target); return json(response, 201, { file:filename }); } catch (error) { return json(response, 400, { error:error.message || 'The PDF could not be uploaded.' }); }
+    try {
+      const rawPdf = String(request.headers['content-type'] || '').toLowerCase().startsWith('application/pdf');
+      const input = rawPdf ? null : await body(request, Math.ceil(maxPdfBytes * 1.4));
+      const filename = safePdfFilename(rawPdf ? decodeURIComponent(String(request.headers['x-upload-filename'] || '')) : input.filename);
+      const pdf = rawPdf ? await rawBody(request, maxPdfBytes) : decodePdfUpload(input.data);
+      if (!pdf.length || pdf.length > maxPdfBytes || pdf.subarray(0, 5).toString('ascii') !== '%PDF-') throw new Error('Upload a valid PDF smaller than 25 MB.');
+      const target = path.join(papersDir, filename); const temporary = `${target}.${randomUUID()}.tmp`;
+      await writeFile(temporary, pdf, { flag:'wx' }); await unlink(target).catch(() => {}); await rename(temporary, target);
+      return json(response, 201, { file:filename });
+    } catch (error) { return json(response, 400, { error:error.message || 'The PDF could not be uploaded.' }); }
   }
   const fileMatch = url.pathname.match(/^\/api\/admin\/files\/([^/]+)$/);
   if (request.method === 'DELETE' && fileMatch) {

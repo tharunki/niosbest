@@ -26,14 +26,14 @@ setMeta('property', 'og:type', 'website');
 setMeta('property', 'og:site_name', 'Best Education');
 setMeta('property', 'og:title', seoTitle);
 setMeta('property', 'og:description', seoDescription);
-setMeta('property', 'og:url', `https://www.besteducation.in/${slugs[type]}`);
-setMeta('property', 'og:image', 'https://www.besteducation.in/logo.png');
+setMeta('property', 'og:url', `https://www.ravitestpapers.in/${slugs[type]}`);
+setMeta('property', 'og:image', 'https://www.ravitestpapers.in/logo.png');
 setMeta('property', 'og:image:alt', 'Best Education logo');
 setMeta('name', 'twitter:card', 'summary_large_image');
-setMeta('name', 'twitter:image', 'https://www.besteducation.in/logo.png');
+setMeta('name', 'twitter:image', 'https://www.ravitestpapers.in/logo.png');
 setMeta('name', 'twitter:title', seoTitle);
 setMeta('name', 'twitter:description', seoDescription);
-const canonical = document.createElement('link'); canonical.rel = 'canonical'; canonical.href = `https://www.besteducation.in/${slugs[type]}`; document.head.append(canonical);
+const canonical = document.createElement('link'); canonical.rel = 'canonical'; canonical.href = `https://www.ravitestpapers.in/${slugs[type]}`; document.head.append(canonical);
 document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="logo.png" alt="Best Education logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">Best <b>Education</b>'; });
 
 const grid = document.querySelector('#library-grid');
@@ -47,13 +47,16 @@ function getCustomCards() {
 }
 
 async function loadSharedCards() {
+  if (!selectedSubject) { sharedCards = []; return; }
+  const requestedClass = selectedClass;
+  const requestedSubject = selectedSubject;
   try {
-    const response = await fetch('/api/cards', { headers:{ Accept:'application/json' } });
+    const query = new URLSearchParams({ type, class:requestedClass, subject:requestedSubject });
+    const response = await fetch(`/api/cards?${query}`, { headers:{ Accept:'application/json' } });
     if (!response.ok) throw new Error();
     const data = await response.json();
-    sharedCards = Array.isArray(data.cards) ? data.cards : [];
-    if (selectedSubject) renderLessons();
-  } catch { sharedCards = []; }
+    if (selectedClass === requestedClass && selectedSubject === requestedSubject) { sharedCards = Array.isArray(data.cards) ? data.cards : []; renderLessons(false); }
+  } catch { if (selectedClass === requestedClass && selectedSubject === requestedSubject) { sharedCards = []; renderLessons(false); } }
 }
 
 function escapeHTML(value = '') {
@@ -68,18 +71,20 @@ document.head.append(style);
 
 function renderSubjects() {
   selectedSubject = null;
+  sharedCards = [];
   const subjects = Object.keys(catalog[selectedClass]);
   courseNote.textContent = `Class ${selectedClass}: choose a subject to see its complete lesson list.`;
   grid.innerHTML = subjects.map((subject) => `<button class="subject-card" type="button" data-subject="${subject}"><span class="chapter">Class ${selectedClass}</span><strong>${subject}</strong><small>View lesson PDFs and pricing →</small></button>`).join('');
   grid.querySelectorAll('[data-subject]').forEach((button) => button.addEventListener('click', () => {
     selectedSubject = button.dataset.subject;
+    sharedCards = [];
     renderLessons();
   }));
   bundle.href = '#library-grid';
   bundle.textContent = 'Choose a subject first';
 }
 
-function renderLessons() {
+function renderLessons(refresh = true) {
   const lessons = catalog[selectedClass][selectedSubject];
   const subjectCards = getCustomCards().filter((card) => card.type === type && card.className === selectedClass && card.subject === selectedSubject);
   const customCards = subjectCards.filter((card) => !card.isBundle);
@@ -107,6 +112,7 @@ function renderLessons() {
   grid.querySelector('.back-subjects').addEventListener('click', renderSubjects);
   bundle.href = bundleCard ? productLink(bundleCard.slug) : '#library-grid';
   bundle.textContent = bundleCard ? `View full bundle · ₹${bundleCard.price || '399'}` : 'Full bundle coming soon';
+  if (refresh) void loadSharedCards();
 }
 
 document.querySelectorAll('[data-class]').forEach((button) => button.addEventListener('click', () => {
@@ -116,4 +122,3 @@ document.querySelectorAll('[data-class]').forEach((button) => button.addEventLis
 }));
 
 renderSubjects();
-loadSharedCards();
