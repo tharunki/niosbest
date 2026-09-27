@@ -512,7 +512,7 @@ function requireTeacherPermission(request, state, permission, batchId = '') {
 }
 function activeEnrollment(state, studentId) { return state.enrollments.find(enrollment => enrollment.studentId === studentId && enrollment.status === 'ACTIVE'); }
 function applicationEnrollment(state, studentId, batchId = '') { return state.enrollments.filter(enrollment => enrollment.studentId === studentId && (!batchId || enrollment.batchId === batchId)).sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))[0]; }
-function paidEnrollment(state, studentId) { return state.enrollments.filter(enrollment => enrollment.studentId === studentId && ['PAYMENT_CONFIRMED', 'VERIFICATION_IN_PROGRESS', 'ACTIVE'].includes(enrollment.status)).sort((a, b) => String(b.updatedAt || b.activatedAt || '').localeCompare(String(a.updatedAt || a.activatedAt || '')))[0]; }
+function paidEnrollment(state, studentId) { return state.enrollments.filter(enrollment => enrollment.studentId === studentId && ['PAYMENT_CONFIRMED', 'NEEDS_ACTION', 'VERIFICATION_IN_PROGRESS', 'ACTIVE'].includes(enrollment.status)).sort((a, b) => String(b.updatedAt || b.activatedAt || '').localeCompare(String(a.updatedAt || a.activatedAt || '')))[0]; }
 function requireActiveEnrollment(request, state) {
   const session = readSession(request);
   if (!session?.studentId) throw Object.assign(new Error('Student authorization is required.'), { status: 401 });
