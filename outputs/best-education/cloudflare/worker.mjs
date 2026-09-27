@@ -8,6 +8,8 @@ const MAX_LOGIN_ATTEMPTS = 5;
 const CHECKOUT_WINDOW_MS = 10 * 60 * 1000;
 const MAX_CHECKOUT_ATTEMPTS = 12;
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
+const INDIVIDUAL_CARD_PRICE = 39;
+const FULL_COURSE_BUNDLE_PRICE = 399;
 const ALLOWED_TYPES = new Set(['sample', 'pyq', 'mcq', 'important']);
 const ALLOWED_CLASSES = new Set(['10', '11', '12']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -20,7 +22,7 @@ const scienceLessons = [
   'Our Environment', 'Sustainable Management of Natural Resources'
 ];
 
-const libraryPages = new Set(['/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html']);
+const staticPagePaths = new Set(['/', '/index.html', '/admin.html', '/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html']);
 
 function securityHeaders(contentType = 'application/json; charset=utf-8') {
   return {
@@ -46,6 +48,15 @@ function text(body, status = 200, contentType = 'text/plain; charset=utf-8', ext
     status,
     headers: { ...securityHeaders(contentType), 'Cache-Control': 'no-store', ...extraHeaders }
   });
+}
+
+function secureStaticPage(response, request) {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(securityHeaders())) {
+    if (name !== 'Content-Type') headers.set(name, value);
+  }
+  if (isWorkersDev(request.url)) headers.set('X-Robots-Tag', 'noindex, nofollow');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function escapeHtml(value = '') {
@@ -150,7 +161,26 @@ async function readJson(request, maxBytes = 1_000_000) {
   return bytes.byteLength ? JSON.parse(decoder.decode(bytes)) : {};
 }
 
+function isFullCourseBundle(value) {
+  return value === true || value === 'true' || value === 1 || value === '1';
+}
+
+function fixedCardPrice(isBundle) {
+  return isBundle ? FULL_COURSE_BUNDLE_PRICE : INDIVIDUAL_CARD_PRICE;
+}
+
+function requireFixedCardPrice(inputPrice, isBundle, source = 'A study card') {
+  const expected = fixedCardPrice(isBundle);
+  if (inputPrice === undefined || inputPrice === null || String(inputPrice).trim() === '') return expected;
+  const supplied = Number(inputPrice);
+  if (!Number.isSafeInteger(supplied) || supplied !== expected) {
+    throw new Error(`${source} must be priced at ₹${expected}${isBundle ? ' for a full-course bundle.' : ' for an individual study card.'}`);
+  }
+  return expected;
+}
+
 function rowToCard(row) {
+  const isBundle = isFullCourseBundle(row.is_bundle);
   return {
     id: row.id,
     type: row.type,
@@ -158,10 +188,12 @@ function rowToCard(row) {
     subject: row.subject,
     title: row.title,
     description: row.description,
-    price: String(row.price),
+    // Price is derived from the bundle flag, so historic or manually changed DB values
+    // can never alter what students see or what the payment provider is charged.
+    price: String(fixedCardPrice(isBundle)),
     link: row.link,
     fileKey: row.file_key,
-    isBundle: Boolean(row.is_bundle),
+    isBundle,
     slug: row.slug,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -215,11 +247,11 @@ async function cleanCard(env, input, existing = null) {
   const subject = String(input.subject || '').trim().slice(0, 80);
   const title = String(input.title || '').trim().slice(0, 140);
   const description = String(input.description || '').trim().slice(0, 500);
-  const price = Math.round(Number(input.price));
   let link = String(input.link || '').trim();
   let fileKey = String(input.fileKey || '').trim();
-  const isBundle = input.isBundle === true || input.isBundle === 'true' || input.isBundle === 1 || input.isBundle === '1';
-  if (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className) || !subject || !title || !Number.isFinite(price) || price < 1 || price > 9999) {
+  const isBundle = isFullCourseBundle(input.isBundle);
+  const price = requireFixedCardPrice(input.price, isBundle);
+  if (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className) || !subject || !title) {
     throw new Error('Invalid card details.');
   }
   if (link) {
@@ -262,11 +294,11 @@ function cleanImportedCard(input, usedSlugs, pdfFiles) {
   const subject = String(input.subject || '').trim().slice(0, 80);
   const title = String(input.title || '').trim().slice(0, 140);
   const description = String(input.description || '').trim().slice(0, 500);
-  const price = Math.round(Number(input.price));
   let link = String(input.link || '').trim();
   let fileKey = String(input.fileKey || '').trim();
-  const isBundle = input.isBundle === true || input.isBundle === 'true' || input.isBundle === 1 || input.isBundle === '1';
-  if (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className) || !subject || !title || !Number.isFinite(price) || price < 1 || price > 9999) {
+  const isBundle = isFullCourseBundle(input.isBundle);
+  const price = requireFixedCardPrice(input.price, isBundle, 'Each imported study card');
+  if (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className) || !subject || !title) {
     throw new Error('The backup contains invalid card details.');
   }
   if (link) {
@@ -299,6 +331,30 @@ function cleanImportedCard(input, usedSlugs, pdfFiles) {
 function cardInsertStatement(env, card) {
   return env.DB.prepare('INSERT INTO cards (id,type,class_name,subject,title,description,price,link,file_key,is_bundle,slug,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
     .bind(card.id, card.type, card.className, card.subject, card.title, card.description, Number(card.price), card.link, card.fileKey, Number(card.isBundle), card.slug, card.createdAt, card.updatedAt);
+}
+
+function bulkCardImportStatement(env, cards) {
+  const payload = JSON.stringify(cards.map((card) => ({
+    id: card.id,
+    type: card.type,
+    className: card.className,
+    subject: card.subject,
+    title: card.title,
+    description: card.description,
+    price: Number(card.price),
+    link: card.link,
+    fileKey: card.fileKey,
+    isBundle: Number(card.isBundle),
+    slug: card.slug,
+    createdAt: card.createdAt,
+    updatedAt: card.updatedAt
+  })));
+  return env.DB.prepare(`INSERT INTO cards (id,type,class_name,subject,title,description,price,link,file_key,is_bundle,slug,created_at,updated_at)
+    SELECT json_extract(value,'$.id'), json_extract(value,'$.type'), json_extract(value,'$.className'), json_extract(value,'$.subject'),
+      json_extract(value,'$.title'), json_extract(value,'$.description'), json_extract(value,'$.price'), json_extract(value,'$.link'),
+      json_extract(value,'$.fileKey'), json_extract(value,'$.isBundle'), json_extract(value,'$.slug'), json_extract(value,'$.createdAt'),
+      json_extract(value,'$.updatedAt')
+    FROM json_each(?)`).bind(payload);
 }
 
 async function insertCard(env, card) {
@@ -364,9 +420,19 @@ function ftsExpression(query) {
   return terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(' AND ');
 }
 
+function searchTerms(searchParams) {
+  const rawQuery = limitUtf8(String(searchParams.get('q') || '').trim().toLowerCase(), 100);
+  const explicitClass = String(searchParams.get('class') || '');
+  const classMatch = rawQuery.match(/\bclass\s*(10|11|12)\b/);
+  const className = ALLOWED_CLASSES.has(explicitClass) ? explicitClass : (classMatch?.[1] || '');
+  // Students naturally type queries such as "Class 10 Science". Class labels are
+  // filters, not FTS terms, because the database stores the class as just "10".
+  const query = rawQuery.replace(/\bclass\s*(10|11|12)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  return { query, className };
+}
+
 async function filterPapers(env, searchParams) {
-  const query = limitUtf8(String(searchParams.get('q') || '').trim().toLowerCase(), 100);
-  const className = String(searchParams.get('class') || '');
+  const { query, className } = searchTerms(searchParams);
   const subject = String(searchParams.get('subject') || '').trim();
   const type = String(searchParams.get('type') || '');
   const clauses = [];
@@ -587,23 +653,6 @@ async function listPdfFiles(env) {
   return files.sort((left, right) => left.localeCompare(right));
 }
 
-function decodePdfUpload(input) {
-  const source = String(input || '');
-  const marker = /^data:application\/pdf(?:;charset=[^;,]+)?;base64,/i;
-  if (!marker.test(source)) throw new Error('Choose a valid PDF file.');
-  const base64 = source.replace(marker, '').replace(/\s/g, '');
-  if (!base64 || !/^[A-Za-z0-9+/=]+$/.test(base64) || Math.floor(base64.length * 3 / 4) > MAX_PDF_BYTES) {
-    throw new Error('Upload a PDF smaller than 25 MB.');
-  }
-  const binary = atob(base64);
-  const pdf = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) pdf[index] = binary.charCodeAt(index);
-  if (!pdf.length || pdf.length > MAX_PDF_BYTES || decoder.decode(pdf.subarray(0, 5)) !== '%PDF-') {
-    throw new Error('Upload a valid PDF smaller than 25 MB.');
-  }
-  return pdf;
-}
-
 function pdfUploadStream(stream) {
   let totalBytes = 0;
   let prefix = new Uint8Array(0);
@@ -638,12 +687,8 @@ function isWorkersDev(url) {
   return new URL(url).hostname.endsWith('.workers.dev');
 }
 
-async function renderLibraryPage(request, env, url) {
-  const response = await env.ASSETS.fetch(request);
-  if (!isWorkersDev(request.url)) return response;
-  const headers = new Headers(response.headers);
-  headers.set('X-Robots-Tag', 'noindex, nofollow');
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+async function renderStaticPage(request, env) {
+  return secureStaticPage(await env.ASSETS.fetch(request), request);
 }
 
 async function renderSitemap(request, env) {
@@ -678,7 +723,7 @@ function paperPageHtml(request, paper) {
     provider: { '@type': 'EducationalOrganization', name: 'Best Education' },
     offers: { '@type': 'Offer', price: paper.price, priceCurrency: 'INR', availability: paper.available ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder', url: `${origin}/paper/${paper.slug}` }
   }).replace(/</g, '\\u003c');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:type" content="product"><meta property="og:site_name" content="Best Education"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:image" content="${escapeHtml(`${origin}/logo.png`)}"><meta name="twitter:card" content="summary_large_image"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"><script type="application/ld+json">${productSchema}</script></head><body><header><a class="brand" href="/index.html"><img src="/logo.png" alt="Best Education logo" width="46" height="46">Best <strong>Education</strong></a><a href="/index.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:type" content="product"><meta property="og:site_name" content="Best Education"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:image" content="${escapeHtml(`${origin}/social-card.png`)}"><meta property="og:image:alt" content="Best Education study materials"><meta property="og:image:width" content="1664"><meta property="og:image:height" content="936"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/social-card.png`)}"><meta name="twitter:image:alt" content="Best Education study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"><script type="application/ld+json">${productSchema}</script></head><body><header><a class="brand" href="/index.html"><img src="/logo.png" alt="Best Education logo" width="46" height="46">Best <strong>Education</strong></a><a href="/index.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script></body></html>`;
 }
 
 async function renderPaperPage(request, env, slug) {
@@ -731,17 +776,18 @@ async function api(request, env, url) {
     if (!await checkoutAllowed(request, env)) return json({ error: 'Too many checkout attempts from this connection. Please wait 10 minutes and try again.' }, 429);
     await recordCheckoutAttempt(request, env);
     const receipt = `best_${crypto.randomUUID().replace(/-/g, '').slice(0, 30)}`;
+    const amount = fixedCardPrice(card.isBundle) * 100;
     const upstream = await fetch('https://api.razorpay.com/v1/orders', {
       method: 'POST',
       headers: { Authorization: razorpayAuthorization(env), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount: Number(card.price) * 100, currency: 'INR', receipt, notes: { card_id: card.id, slug: card.slug } })
+      body: JSON.stringify({ amount, currency: 'INR', receipt, notes: { card_id: card.id, slug: card.slug } })
     });
     const order = await upstream.json().catch(() => ({}));
-    if (!upstream.ok || !order.id) return json({ error: 'The payment service could not create an order. Please try again.' }, 502);
+    if (!upstream.ok || !order.id || Number(order.amount) !== amount || (order.currency && order.currency !== 'INR')) return json({ error: 'The payment service could not create an order. Please try again.' }, 502);
     const recoveryToken = bytesToBase64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
     const recoveryExpiresAt = new Date(Date.now() + DOWNLOAD_DURATION_MS).toISOString();
-    await saveOrder(env, { orderId: order.id, cardId: card.id, amount: Number(order.amount), currency: order.currency || 'INR', recoveryTokenHash: await sha256Hex(recoveryToken), expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), recoveryExpiresAt });
-    return json({ key: env.RAZORPAY_KEY_ID, order: { id: order.id, amount: order.amount, currency: order.currency }, recovery: { token: recoveryToken, expiresAt: recoveryExpiresAt }, paper: publicCard(card) });
+    await saveOrder(env, { orderId: order.id, cardId: card.id, amount, currency: 'INR', recoveryTokenHash: await sha256Hex(recoveryToken), expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), recoveryExpiresAt });
+    return json({ key: env.RAZORPAY_KEY_ID, order: { id: order.id, amount, currency: 'INR' }, recovery: { token: recoveryToken, expiresAt: recoveryExpiresAt }, paper: publicCard(card) });
   }
   if (request.method === 'POST' && url.pathname === '/api/payment/verify') {
     try {
@@ -785,20 +831,13 @@ async function api(request, env, url) {
   if (request.method === 'POST' && url.pathname === '/api/admin/files') {
     try {
       const contentType = String(request.headers.get('Content-Type') || '').toLowerCase();
-      if (contentType.startsWith('application/pdf')) {
-        const filename = safePdfFilename(decodeURIComponent(request.headers.get('X-Upload-Filename') || ''));
-        const declaredSize = Number(request.headers.get('Content-Length') || 0);
-        if (Number.isFinite(declaredSize) && declaredSize > MAX_PDF_BYTES) throw new Error('Upload a PDF smaller than 25 MB.');
-        if (!request.body) throw new Error('Choose a valid PDF file.');
-        await ensureFileCanChange(env, filename);
-        await env.PAPERS.put(filename, pdfUploadStream(request.body), { httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${filename}"` } });
-        return json({ file: filename }, 201);
-      }
-      const input = await readJson(request, Math.ceil(MAX_PDF_BYTES * 1.4));
-      const filename = safePdfFilename(input.filename);
-      const pdf = decodePdfUpload(input.data);
+      if (!contentType.startsWith('application/pdf')) throw new Error('Upload a PDF file.');
+      const filename = safePdfFilename(decodeURIComponent(request.headers.get('X-Upload-Filename') || ''));
+      const declaredSize = Number(request.headers.get('Content-Length') || 0);
+      if (Number.isFinite(declaredSize) && declaredSize > MAX_PDF_BYTES) throw new Error('Upload a PDF smaller than 25 MB.');
+      if (!request.body) throw new Error('Choose a valid PDF file.');
       await ensureFileCanChange(env, filename);
-      await env.PAPERS.put(filename, pdf, { httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${filename}"` } });
+      await env.PAPERS.put(filename, pdfUploadStream(request.body), { httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${filename}"` } });
       return json({ file: filename }, 201);
     } catch (error) {
       return json({ error: error.message || 'The PDF could not be uploaded.' }, 400);
@@ -855,7 +894,9 @@ async function api(request, env, url) {
         parsed.push(cleanImportedCard(item, usedSlugs, pdfFiles));
       }
       if (new Set(parsed.map((card) => card.id)).size !== parsed.length) throw new Error('The backup contains duplicate card IDs.');
-      await env.DB.batch([env.DB.prepare('DELETE FROM cards'), ...parsed.map((card) => cardInsertStatement(env, card))]);
+      // Keep a full 500-card import within D1 Free's per-invocation statement limit.
+      // Validation happens above; this is one JSON-bound insert plus the replacement delete.
+      await env.DB.batch([env.DB.prepare('DELETE FROM cards'), bulkCardImportStatement(env, parsed)]);
       return json({ count: parsed.length });
     } catch (error) { return json({ error: error.message || 'The backup could not be imported.' }, 400); }
   }
@@ -871,7 +912,7 @@ export default {
       if (url.pathname === '/robots.txt') return renderRobots(request);
       const paperMatch = url.pathname.match(/^\/paper\/([a-z0-9-]+)$/i);
       if (paperMatch) return await renderPaperPage(request, env, paperMatch[1]);
-      if (libraryPages.has(url.pathname)) return await renderLibraryPage(request, env, url);
+      if (staticPagePaths.has(url.pathname)) return await renderStaticPage(request, env);
       return env.ASSETS.fetch(request);
     } catch (error) {
       console.error('Best Education Worker error', error);

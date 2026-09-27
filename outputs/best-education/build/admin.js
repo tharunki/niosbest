@@ -3,6 +3,8 @@ const subjectOptions = {
   11:['Physics','Chemistry','Biology','Mathematics','English','Computer Science'],
   12:['Physics','Chemistry','Biology','Mathematics','English','Computer Science']
 };
+const INDIVIDUAL_CARD_PRICE = '39';
+const FULL_COURSE_BUNDLE_PRICE = '399';
 let cards = [], editingId = null, toastTimer;
 const loginView = document.querySelector('#login-view');
 const dashboard = document.querySelector('#dashboard');
@@ -19,6 +21,13 @@ const fileList = document.querySelector('#pdf-files');
 
 function escapeHTML(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]); }
 function value(id) { return document.querySelector(`#${id}`).value; }
+function syncFixedPrice() {
+  const isBundle = document.querySelector('#isBundle').checked;
+  document.querySelector('#price').value = isBundle ? FULL_COURSE_BUNDLE_PRICE : INDIVIDUAL_CARD_PRICE;
+  document.querySelector('#price-helper').textContent = isBundle
+    ? 'Full-course bundles are always ₹399. The server checks this again before saving.'
+    : 'Individual study cards are always ₹39. The server checks this again before saving.';
+}
 function showToast(message, kind = 'success') { clearTimeout(toastTimer); toast.textContent = message; toast.classList.toggle('error', kind === 'error'); toast.hidden = false; toastTimer = setTimeout(() => { toast.hidden = true; }, 3200); }
 async function request(url, options = {}) {
   const response = await fetch(url, { ...options, headers:{ Accept:'application/json', ...(options.body ? { 'Content-Type':'application/json' } : {}), ...options.headers } });
@@ -46,7 +55,7 @@ async function loadFiles(selected = value('fileKey')) {
     renderFiles(files);
   } catch { select.innerHTML = '<option value="">No protected PDFs found</option>'; renderFiles([]); }
 }
-function resetForm() { editingId = null; form.reset(); document.querySelector('#price').value = '39'; document.querySelector('#form-heading').textContent = 'New study card'; document.querySelector('#cancel-edit').hidden = true; refreshSubjects(); loadFiles(''); }
+function resetForm() { editingId = null; form.reset(); syncFixedPrice(); document.querySelector('#form-heading').textContent = 'New study card'; document.querySelector('#cancel-edit').hidden = true; refreshSubjects(); loadFiles(''); }
 function showDashboard() { loginView.hidden = true; dashboard.hidden = false; }
 function showLogin() { dashboard.hidden = true; loginView.hidden = false; document.querySelector('#password').value = ''; }
 function render() {
@@ -60,7 +69,7 @@ async function loadCards() { const data = await request('/api/admin/cards'); car
 async function editCard(id) {
   const card = cards.find(item => item.id === id); if (!card) return; editingId = card.id;
   document.querySelector('#type').value = card.type; document.querySelector('#className').value = card.className; refreshSubjects();
-  ['subject','title','description','price','link'].forEach(field => { document.querySelector(`#${field}`).value = card[field] || ''; }); document.querySelector('#isBundle').checked = Boolean(card.isBundle);
+  ['subject','title','description','link'].forEach(field => { document.querySelector(`#${field}`).value = card[field] || ''; }); document.querySelector('#isBundle').checked = Boolean(card.isBundle); syncFixedPrice();
   await loadFiles(card.fileKey || ''); document.querySelector('#form-heading').textContent = 'Edit study card'; document.querySelector('#cancel-edit').hidden = false; window.scrollTo({ top:0, behavior:'smooth' });
 }
 async function removeCard(id) {
@@ -76,7 +85,8 @@ loginForm.addEventListener('submit', async event => {
 });
 form.addEventListener('submit', async event => {
   event.preventDefault(); status.textContent = 'Saving…';
-  const card = { type:value('type'), className:value('className'), subject:value('subject'), title:value('title').trim(), description:value('description').trim(), price:value('price'), fileKey:value('fileKey'), link:value('link').trim(), isBundle:document.querySelector('#isBundle').checked };
+  // Price is intentionally absent: the server derives ₹39 or ₹399 from isBundle.
+  const card = { type:value('type'), className:value('className'), subject:value('subject'), title:value('title').trim(), description:value('description').trim(), fileKey:value('fileKey'), link:value('link').trim(), isBundle:document.querySelector('#isBundle').checked };
   try {
     const result = await request(editingId ? `/api/admin/cards/${encodeURIComponent(editingId)}` : '/api/admin/cards', { method:editingId ? 'PUT' : 'POST', body:JSON.stringify(card) });
     if (editingId) cards = cards.map(item => item.id === editingId ? result.card : item); else cards.unshift(result.card);
@@ -85,7 +95,7 @@ form.addEventListener('submit', async event => {
 });
 document.querySelector('#logout').addEventListener('click', async () => { try { await request('/api/admin/logout', { method:'POST' }); } finally { showLogin(); showToast('Signed out.'); } });
 document.querySelector('#className').addEventListener('change', refreshSubjects);
-document.querySelector('#isBundle').addEventListener('change', event => { const price = document.querySelector('#price'); if (event.target.checked && price.value === '39') price.value = '399'; if (!event.target.checked && price.value === '399') price.value = '39'; });
+document.querySelector('#isBundle').addEventListener('change', syncFixedPrice);
 document.querySelector('#filter-cards').addEventListener('input', render);
 document.querySelector('#cancel-edit').addEventListener('click', resetForm);
 document.querySelector('#export-data').addEventListener('click', () => {
@@ -118,4 +128,5 @@ async function removePdf(filename) {
   catch (error) { showToast(error.message, 'error'); }
 }
 refreshSubjects();
+syncFixedPrice();
 request('/api/admin/session').then(async data => { if (data.authenticated) { showDashboard(); await Promise.all([loadCards(), loadFiles('')]); } else showLogin(); }).catch(() => { showLogin(); loginStatus.textContent = 'Start the Best Education server to use the admin dashboard.'; });

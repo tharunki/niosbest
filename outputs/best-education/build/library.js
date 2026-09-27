@@ -2,10 +2,12 @@ const science10Lessons = [
   'Chemical Reactions and Equations', 'Acids, Bases and Salts', 'Metals and Non-metals', 'Carbon and its Compounds', 'Life Processes', 'Control and Coordination', 'How Do Organisms Reproduce?', 'Heredity', 'Light: Reflection and Refraction', 'The Human Eye and the Colourful World', 'Electricity', 'Magnetic Effects of Electric Current', 'Our Environment', 'Sustainable Management of Natural Resources'
 ];
 
+// Only published, verified lesson titles belong here. Additional subjects appear automatically
+// after an administrator adds a real card for them, so learners are never sent to an empty subject.
 const catalog = {
-  10: { Science: science10Lessons, Mathematics: [], 'Social Science': [], English: [], Tamil: [] },
-  11: { Physics: [], Chemistry: [], Biology: [], Mathematics: [], English: [], 'Computer Science': [] },
-  12: { Physics: [], Chemistry: [], Biology: [], Mathematics: [], English: [], 'Computer Science': [] }
+  10: { Science: science10Lessons },
+  11: {},
+  12: {}
 };
 
 const type = document.body.dataset.type;
@@ -28,10 +30,14 @@ setMeta('property', 'og:site_name', 'Best Education');
 setMeta('property', 'og:title', seoTitle);
 setMeta('property', 'og:description', seoDescription);
 setMeta('property', 'og:url', `${seoOrigin}/${slugs[type]}`);
-setMeta('property', 'og:image', `${seoOrigin}/logo.png`);
-setMeta('property', 'og:image:alt', 'Best Education logo');
-setMeta('name', 'twitter:card', 'summary');
-setMeta('name', 'twitter:image', `${seoOrigin}/logo.png`);
+setMeta('property', 'og:image', `${seoOrigin}/social-card.png`);
+setMeta('property', 'og:image:alt', 'Best Education study materials');
+setMeta('property', 'og:image:width', '1664');
+setMeta('property', 'og:image:height', '936');
+setMeta('property', 'og:image:type', 'image/png');
+setMeta('name', 'twitter:card', 'summary_large_image');
+setMeta('name', 'twitter:image', `${seoOrigin}/social-card.png`);
+setMeta('name', 'twitter:image:alt', 'Best Education study materials');
 setMeta('name', 'twitter:title', seoTitle);
 setMeta('name', 'twitter:description', seoDescription);
 let canonical = document.head.querySelector('link[rel="canonical"]');
@@ -42,25 +48,12 @@ document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img
 const grid = document.querySelector('#library-grid');
 const courseNote = document.querySelector('#course-note');
 const bundle = document.querySelector('#bundle-button');
+bundle.removeAttribute('target');
+bundle.removeAttribute('rel');
 let selectedClass = '10';
 let selectedSubject = null;
-let sharedCards = [];
-function getCustomCards() {
-  return sharedCards;
-}
-
-async function loadSharedCards() {
-  if (!selectedSubject) { sharedCards = []; return; }
-  const requestedClass = selectedClass;
-  const requestedSubject = selectedSubject;
-  try {
-    const query = new URLSearchParams({ type, class:requestedClass, subject:requestedSubject });
-    const response = await fetch(`/api/cards?${query}`, { headers:{ Accept:'application/json' } });
-    if (!response.ok) throw new Error();
-    const data = await response.json();
-    if (selectedClass === requestedClass && selectedSubject === requestedSubject) { sharedCards = Array.isArray(data.cards) ? data.cards : []; renderLessons(false); }
-  } catch { if (selectedClass === requestedClass && selectedSubject === requestedSubject) { sharedCards = []; renderLessons(false); } }
-}
+let classCards = [];
+let classRequestId = 0;
 
 function escapeHTML(value = '') {
   return String(value).replace(/[&<>'"]/g, (character) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]);
@@ -68,34 +61,73 @@ function escapeHTML(value = '') {
 
 function productLink(slug) { return slug ? `/paper/${encodeURIComponent(slug)}` : '#library-grid'; }
 
-const style = document.createElement('style');
-style.textContent = '.subject-card{cursor:pointer;text-align:left;border:1px solid #d9e0dc;background:#fff;border-radius:11px;padding:22px;min-height:158px;color:#19272b;font:inherit}.subject-card:hover{border-color:#263eb7;box-shadow:0 10px 22px #1b344014}.subject-card strong{display:block;font:700 23px Georgia,serif;margin:16px 0 8px}.subject-card small{color:#657477;font-size:13px}.lesson-toolbar{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:4px}.back-subjects{border:0;background:transparent;color:#263eb7;font:700 13px "DM Sans",sans-serif;padding:0;cursor:pointer}.empty-library{grid-column:1/-1;background:#fff8df;border:1px solid #eed384;border-radius:10px;padding:24px;line-height:1.55;color:#596668}.empty-library strong{display:block;color:#19272b;margin-bottom:5px}';
-document.head.append(style);
+function subjectsForSelectedClass() {
+  const verifiedSubjects = Object.keys(catalog[selectedClass] || {});
+  const publishedSubjects = classCards
+    .filter((card) => card.type === type && card.className === selectedClass && card.subject)
+    .map((card) => card.subject);
+  return [...new Set([...verifiedSubjects, ...publishedSubjects])];
+}
+
+async function loadClassCards() {
+  const requestId = ++classRequestId;
+  const requestedClass = selectedClass;
+  try {
+    const query = new URLSearchParams({ type, class: requestedClass });
+    const response = await fetch(`/api/cards?${query}`, { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error();
+    const data = await response.json();
+    if (requestId !== classRequestId || selectedClass !== requestedClass) return;
+    classCards = Array.isArray(data.cards) ? data.cards : [];
+  } catch {
+    if (requestId !== classRequestId || selectedClass !== requestedClass) return;
+    classCards = [];
+  }
+  if (selectedSubject) renderLessons(); else renderSubjects();
+}
 
 function renderSubjects() {
   selectedSubject = null;
-  sharedCards = [];
-  const subjects = Object.keys(catalog[selectedClass]);
-  courseNote.textContent = `Class ${selectedClass}: choose a subject to see its complete lesson list.`;
-  grid.innerHTML = subjects.map((subject) => `<button class="subject-card" type="button" data-subject="${subject}"><span class="chapter">Class ${selectedClass}</span><strong>${subject}</strong><small>View lesson PDFs and pricing →</small></button>`).join('');
+  const subjects = subjectsForSelectedClass();
+  if (!subjects.length) {
+    courseNote.textContent = `Class ${selectedClass}: the verified subject catalogue is being prepared.`;
+    grid.innerHTML = `<div class="empty-library"><strong>Class ${escapeHTML(selectedClass)} materials are not published yet.</strong>Best Education will list a subject here after its verified lesson titles and secure PDFs are ready.</div>`;
+    bundle.href = '#library-grid';
+    bundle.textContent = 'Full bundle coming soon';
+    return;
+  }
+  courseNote.textContent = `Class ${selectedClass}: choose a subject to see its lesson list and released PDFs.`;
+  grid.innerHTML = subjects.map((subject) => {
+    const lessonCount = (catalog[selectedClass]?.[subject] || []).length;
+    const releasedCount = classCards.filter((card) => card.type === type && card.className === selectedClass && card.subject === subject && card.available).length;
+    const detail = lessonCount ? `${lessonCount} verified lesson titles${releasedCount ? ` · ${releasedCount} PDF${releasedCount === 1 ? '' : 's'} released` : ' · PDFs released as published'}` : `${releasedCount} PDF${releasedCount === 1 ? '' : 's'} released`;
+    return `<button class="subject-card" type="button" data-subject="${escapeHTML(subject)}"><span class="chapter">Class ${escapeHTML(selectedClass)}</span><strong>${escapeHTML(subject)}</strong><small>${escapeHTML(detail)} →</small></button>`;
+  }).join('');
   grid.querySelectorAll('[data-subject]').forEach((button) => button.addEventListener('click', () => {
     selectedSubject = button.dataset.subject;
-    sharedCards = [];
     renderLessons();
   }));
   bundle.href = '#library-grid';
   bundle.textContent = 'Choose a subject first';
 }
 
-function renderLessons(refresh = true) {
-  const lessons = catalog[selectedClass][selectedSubject];
-  const subjectCards = getCustomCards().filter((card) => card.type === type && card.className === selectedClass && card.subject === selectedSubject);
+function purchaseAction(card, fallbackPrice, unitLabel) {
+  if (!card?.available) return '<span class="coming-soon">Coming soon</span>';
+  return `<span class="price">₹${escapeHTML(card.price || fallbackPrice)}<small>${escapeHTML(unitLabel)}</small></span><a class="button" href="${productLink(card.slug)}">View details</a>`;
+}
+
+function renderLessons() {
+  const lessons = catalog[selectedClass]?.[selectedSubject] || [];
+  const subjectCards = classCards.filter((card) => card.type === type && card.className === selectedClass && card.subject === selectedSubject);
   const customCards = subjectCards.filter((card) => !card.isBundle);
   const bundleCard = subjectCards.find((card) => card.isBundle);
-  courseNote.textContent = `Class ${selectedClass} · ${selectedSubject}. Choose a lesson PDF for ₹39, or get the full bundle for ₹399.`;
-  const toolbar = `<div class="lesson-toolbar"><span class="chapter">Class ${selectedClass} · ${selectedSubject}</span><button class="back-subjects" type="button">← All subjects</button></div>`;
+  const releasedCount = subjectCards.filter((card) => card.available).length;
+  courseNote.textContent = releasedCount
+    ? `Class ${selectedClass} · ${selectedSubject}. Select a released PDF for secure purchase.`
+    : `Class ${selectedClass} · ${selectedSubject}. This catalogue is released only when its secure PDF is ready.`;
+  const toolbar = `<div class="lesson-toolbar"><span class="chapter">Class ${escapeHTML(selectedClass)} · ${escapeHTML(selectedSubject)}</span><button class="back-subjects" type="button">← All subjects</button></div>`;
   if (!lessons.length && !customCards.length) {
-    grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${selectedSubject} lessons will be added next.</strong>Send the subject PDFs or official lesson list and Best Education will add the exact chapter-wise library here.</div>`;
+    grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${escapeHTML(selectedSubject)} is not published yet.</strong>Best Education will add the exact lesson list and PDFs after they are verified.</div>`;
   } else {
     const standardSlugs = new Set();
     const standardCards = lessons.map((lesson, index) => {
@@ -104,24 +136,26 @@ function renderLessons(refresh = true) {
       const custom = customCards.find((card) => card.slug === slug);
       const title = custom?.title || lesson;
       const description = custom?.description || `${labels[type]} PDF · chapter-wise practice`;
-      const price = custom?.price || '39';
-      return `<article class="lesson"><span class="chapter">Lesson ${index + 1} · Class ${selectedClass}</span><h3>${escapeHTML(title)}</h3><p>${escapeHTML(description)}</p><div class="buy"><span class="price">₹${escapeHTML(price)}<small>per lesson PDF</small></span><a class="button" href="${productLink(custom?.slug || slug)}">View details</a></div></article>`;
+      return `<article class="lesson"><span class="chapter">Lesson ${index + 1} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(title)}</h3><p>${escapeHTML(description)}</p><div class="buy">${purchaseAction(custom, '39', 'per lesson PDF')}</div></article>`;
     }).join('');
     const addedCards = customCards.filter((card) => !standardSlugs.has(card.slug)).map((card) => {
-      return `<article class="lesson"><span class="chapter">${escapeHTML(labels[type])} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || `${labels[type]} practice material`)}</p><div class="buy"><span class="price">₹${escapeHTML(card.price || '39')}<small>per PDF</small></span><a class="button" href="${productLink(card.slug)}">View details</a></div></article>`;
+      return `<article class="lesson"><span class="chapter">${escapeHTML(labels[type])} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || `${labels[type]} practice material`)}</p><div class="buy">${purchaseAction(card, '39', 'per PDF')}</div></article>`;
     }).join('');
     grid.innerHTML = toolbar + standardCards + addedCards;
   }
-  grid.querySelector('.back-subjects').addEventListener('click', renderSubjects);
-  bundle.href = bundleCard ? productLink(bundleCard.slug) : '#library-grid';
-  bundle.textContent = bundleCard ? `View full bundle · ₹${bundleCard.price || '399'}` : 'Full bundle coming soon';
-  if (refresh) void loadSharedCards();
+  grid.querySelector('.back-subjects')?.addEventListener('click', renderSubjects);
+  bundle.href = bundleCard?.available ? productLink(bundleCard.slug) : '#library-grid';
+  bundle.textContent = bundleCard?.available ? `View full bundle · ₹${bundleCard.price || '399'}` : 'Full bundle coming soon';
 }
 
 document.querySelectorAll('[data-class]').forEach((button) => button.addEventListener('click', () => {
   selectedClass = button.dataset.class;
+  selectedSubject = null;
+  classCards = [];
   document.querySelectorAll('[data-class]').forEach((item) => item.classList.toggle('active', item === button));
   renderSubjects();
+  void loadClassCards();
 }));
 
 renderSubjects();
+void loadClassCards();

@@ -7,8 +7,8 @@ let searchTimer;
 let activeSearchRequest;
 let searchRequestId = 0;
 
-function closeMenu() { nav?.classList.remove('open'); menuButton?.setAttribute('aria-expanded', 'false'); }
-menuButton?.addEventListener('click', () => { const isOpen = nav.classList.toggle('open'); menuButton.setAttribute('aria-expanded', String(isOpen)); });
+function closeMenu() { nav?.classList.remove('open'); menuButton?.setAttribute('aria-expanded', 'false'); menuButton?.setAttribute('aria-label', 'Open menu'); }
+menuButton?.addEventListener('click', () => { const isOpen = nav.classList.toggle('open'); menuButton.setAttribute('aria-expanded', String(isOpen)); menuButton.setAttribute('aria-label', isOpen ? 'Close menu' : 'Open menu'); });
 nav?.querySelectorAll('a').forEach(link => link.addEventListener('click', closeMenu));
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(); });
 
@@ -19,14 +19,18 @@ searchStatus.style.cssText = 'margin:12px 0 0;color:#657477;font-size:13px;';
 document.querySelector('.quick-search')?.append(searchStatus);
 const fallbackPapers = [
   ['1','Chemical Reactions and Equations'],['2','Acids, Bases and Salts'],['3','Metals and Non-metals'],['4','Carbon and its Compounds'],['5','Life Processes'],['6','Control and Coordination'],['7','How Do Organisms Reproduce?'],['8','Heredity'],['9','Light: Reflection and Refraction'],['10','The Human Eye and the Colourful World'],['11','Electricity'],['12','Magnetic Effects of Electric Current'],['13','Our Environment'],['14','Sustainable Management of Natural Resources']
-].map(([chapter,title]) => ({ slug:`sample-class-10-science-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`, className:'10', subject:'Science', type:'sample', title, description:'Sample papers, PYQs, MCQs and important questions', price:'39' }));
+].map(([chapter,title]) => ({ slug:`sample-class-10-science-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`, className:'10', subject:'Science', type:'sample', title, description:'Sample papers, PYQs, MCQs and important questions', price:'39', available:false }));
 
 function escapeHTML(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]); }
 function productUrl(slug) { return `/paper/${encodeURIComponent(slug)}`; }
+function paperAction(paper) {
+  if (!paper.available) return '<span class="availability">Coming soon</span>';
+  return `<span>₹${escapeHTML(paper.price || '39')} PDF</span><a href="${productUrl(paper.slug)}" aria-label="View ${escapeHTML(paper.title)}">→</a>`;
+}
 function renderPapers(papers, message = '') {
   paperGrid.setAttribute('aria-busy', 'false');
   if (!papers.length) { paperGrid.innerHTML = '<p class="empty-state">No papers match that search yet. Try a class, subject, or chapter name.</p>'; return; }
-  paperGrid.innerHTML = papers.map((paper, index) => `<article class="paper-card"><span class="tag ${['blue','amber','green','plum'][index % 4]}">Class ${escapeHTML(paper.className)} · ${escapeHTML(paper.subject)}</span><h3>${escapeHTML(paper.title)}</h3><p>${escapeHTML(paper.description || 'Chapter-wise study material')}</p><footer><span>₹${escapeHTML(paper.price || '39')} PDF</span><a href="${productUrl(paper.slug)}" aria-label="View ${escapeHTML(paper.title)}">→</a></footer></article>`).join('');
+  paperGrid.innerHTML = papers.map((paper, index) => `<article class="paper-card"><span class="tag ${['blue','amber','green','plum'][index % 4]}">Class ${escapeHTML(paper.className)} · ${escapeHTML(paper.subject)}</span><h3>${escapeHTML(paper.title)}</h3><p>${escapeHTML(paper.description || 'Chapter-wise study material')}</p><footer>${paperAction(paper)}</footer></article>`).join('');
   if (message) searchStatus.textContent = message;
 }
 async function fetchPapers(query = '', initial = false) {

@@ -7,7 +7,7 @@
   "assets": {
     "directory": "./build",
     "binding": "ASSETS",
-    "run_worker_first": ["/api/*", "/paper/*", "/sitemap.xml", "/robots.txt", "/healthz", "/sample-papers.html", "/pyqs.html", "/mcqs.html", "/important-questions.html"]
+    "run_worker_first": ["/", "/index.html", "/admin.html", "/api/*", "/paper/*", "/sitemap.xml", "/robots.txt", "/healthz", "/sample-papers.html", "/pyqs.html", "/mcqs.html", "/important-questions.html"]
   },
   "d1_databases": [
     {
