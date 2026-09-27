@@ -808,7 +808,9 @@ const server = createServer(async (request, response) => {
       const activated = await updateState(data => {
         const payment = data.payments.find(item => item.id === paymentId && item.provider === 'razorpay');
         if (!payment) throw Object.assign(new Error('Payment order not found.'), { status: 404 });
-        if (payment.providerOrderId && capture.order_id && payment.providerOrderId !== capture.order_id) throw Object.assign(new Error('Payment order mismatch.'), { status: 409 });
+        if (!payment.providerOrderId || capture.order_id !== payment.providerOrderId) throw Object.assign(new Error('Payment order mismatch.'), { status: 409 });
+        if (capture.status !== 'captured' || Number(capture.amount) !== Number(payment.amount) || String(capture.currency || '').toUpperCase() !== String(payment.currency || '').toUpperCase()) throw Object.assign(new Error('Captured payment amount or currency does not match this order.'), { status: 409 });
+        if (!capture.id) throw Object.assign(new Error('The capture is missing its Razorpay payment reference.'), { status: 422 });
         if (payment.status === 'CAPTURED') return { payment, enrollment: paidEnrollment(data, payment.studentId), duplicate: true };
         return { payment, enrollment: activateEnrollment(data, payment, capture.id), duplicate: false };
       });
@@ -878,14 +880,23 @@ const server = createServer(async (request, response) => {
     const verifyPaymentMatch = path.match(/^\/api\/payments\/([^/]+)\/razorpay-verify$/);
     if (method === 'POST' && verifyPaymentMatch) {
       const session = readSession(request); if (!session?.studentId) return send(response, 401, { error: 'Student sign-in is required.' });
-      const input = await body(request), paymentId = String(input.razorpay_payment_id || ''), orderId = String(input.razorpay_order_id || ''), signature = String(input.razorpay_signature || ''), keySecret = process.env.RAZORPAY_KEY_SECRET;
-      if (!keySecret || !paymentId || !orderId || !signature) return send(response, 422, { error: 'A complete signed Razorpay payment response is required.' });
+      const input = await body(request), paymentId = String(input.razorpay_payment_id || ''), orderId = String(input.razorpay_order_id || ''), signature = String(input.razorpay_signature || ''), keyId = process.env.RAZORPAY_KEY_ID, keySecret = process.env.RAZORPAY_KEY_SECRET;
+      if (!keyId || !keySecret || !paymentId || !orderId || !signature) return send(response, 422, { error: 'A complete signed Razorpay payment response is required.' });
       const expected = createHmac('sha256', keySecret).update(`${orderId}|${paymentId}`).digest('hex');
       if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return send(response, 401, { error: 'Razorpay payment signature verification failed.' });
+      const stateBeforeVerification = await readState(), pendingPayment = stateBeforeVerification.payments.find(item => item.id === verifyPaymentMatch[1] && item.studentId === session.studentId && item.provider === 'razorpay');
+      if (!pendingPayment) return send(response, 404, { error: 'Payment order not found.' });
+      if (!pendingPayment.providerOrderId || pendingPayment.providerOrderId !== orderId) return send(response, 409, { error: 'Payment order mismatch.' });
+      if (pendingPayment.status !== 'CAPTURED') {
+        const upstream = await fetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentId)}`, { headers: { authorization: `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}` }, signal: AbortSignal.timeout(15_000) });
+        if (!upstream.ok) return send(response, 502, { error: 'Razorpay payment verification could not be completed.' });
+        const captured = await upstream.json();
+        if (captured.status !== 'captured' || captured.order_id !== pendingPayment.providerOrderId || Number(captured.amount) !== Number(pendingPayment.amount) || String(captured.currency || '').toUpperCase() !== String(pendingPayment.currency || '').toUpperCase()) return send(response, 409, { error: 'Payment is not captured for the correct order, amount, and currency yet. Please retry shortly.' });
+      }
       const activated = await updateState(data => {
         const payment = data.payments.find(item => item.id === verifyPaymentMatch[1] && item.studentId === session.studentId && item.provider === 'razorpay');
         if (!payment) throw Object.assign(new Error('Payment order not found.'), { status: 404 });
-        if (payment.providerOrderId !== orderId) throw Object.assign(new Error('Payment order mismatch.'), { status: 409 });
+        if (!payment.providerOrderId || payment.providerOrderId !== orderId) throw Object.assign(new Error('Payment order mismatch.'), { status: 409 });
         if (payment.status === 'CAPTURED') return { payment, enrollment: paidEnrollment(data, session.studentId), duplicate: true };
         return { payment, enrollment: activateEnrollment(data, payment, paymentId), duplicate: false };
       });
