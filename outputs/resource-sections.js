@@ -33,7 +33,7 @@ function render() {
       link.setAttribute('aria-label', 'Buy Class ' + level + ' ' + subject + ' ' + kind + ' for ₹' + price);
       card.append(heading, copy, link); fragment.append(card);
     }
-    if (!matches.length) { const empty = document.createElement('p'); empty.textContent = niosCatalogueSelected ? 'No resources match this class and search.' : `${boardName} subject PDFs are being prepared. Choose NIOS to browse the current catalogue.`; fragment.append(empty); }
+    if (!matches.length) { const empty = document.createElement('p'); empty.className = 'resource-empty'; empty.textContent = niosCatalogueSelected ? 'No NIOS PDFs match this class and search. Clear the search or choose another class to see more.' : `${boardName} PDFs are being prepared for this resource hub. Choose NIOS to browse the current catalogue.`; fragment.append(empty); }
     list.replaceChildren(fragment);
   }
   document.querySelector('#found').textContent = count;
