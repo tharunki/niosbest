@@ -36,7 +36,8 @@ if (isProduction && adminToken.length < 32) throw new Error('Set a high-entropy 
 const bootstrapAdminEmail = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
 const bootstrapAdminPassword = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
 const permanentSuperAdminEmails = new Set(['niosbest.tvl@gmail.com', 'tkcrackjee@gmail.com']);
-const defaultTeacherPermissions = () => ({ manageLiveClasses: true, manageHomework: true, manageMaterials: true, gradeSubmissions: true, allowedBatchIds: [] });
+// An empty allow-list means a new teacher has no batch access until a super-admin assigns one.
+const defaultTeacherPermissions = () => ({ manageLiveClasses: false, manageHomework: false, manageMaterials: false, gradeSubmissions: false, allowedBatchIds: [] });
 
 function now() { return new Date().toISOString(); }
 function uid(prefix) { return `${prefix}_${randomBytes(9).toString('hex')}`; }
@@ -146,7 +147,7 @@ await updateState(state => {
   if (demosEnabled) {
     if (!state.users.some(user => user.email === 'aarav@example.com')) state.users.push({ id: 'user_demo_aarav', studentId: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', passwordHash: hashPassword('student123'), role: 'student', createdAt: now() });
     if (!state.users.some(user => user.email === 'admin@niosbest.in')) state.users.push({ id: 'user_admin', name: 'Academy Admin', email: 'admin@niosbest.in', passwordHash: hashPassword('admin123'), role: 'admin', createdAt: now() });
-    if (!state.users.some(user => user.email === 'teacher@niosbest.in')) state.users.push({ id: 'user_teacher_science', name: 'Dr. Meera Iyer', email: 'teacher@niosbest.in', passwordHash: hashPassword('teacher123'), role: 'teacher', createdAt: now() });
+    if (!state.users.some(user => user.email === 'teacher@niosbest.in')) state.users.push({ id: 'user_teacher_science', name: 'Dr. Meera Iyer', email: 'teacher@niosbest.in', passwordHash: hashPassword('teacher123'), role: 'teacher', permissions: { manageLiveClasses: true, manageHomework: true, manageMaterials: true, gradeSubmissions: true, allowedBatchIds: ['batch_class12_stream1'] }, createdAt: now() });
   }
   for (const email of permanentSuperAdminEmails) {
     let owner = state.users.find(user => String(user.email || '').toLowerCase() === email);
@@ -494,13 +495,19 @@ function requireSuperAdmin(request, state) {
   if (session?.role === 'admin' && user && (user.superAdmin || permanentSuperAdminEmails.has(String(user.email || '').toLowerCase()))) return { session, user };
   throw Object.assign(new Error('Super-admin authorization is required.'), { status: 403 });
 }
+function teacherAllowedBatchIds(session, state) {
+  if (session.role === 'admin') return null;
+  const user = state.users.find(item => item.id === session.sub && item.role === 'teacher');
+  if (!user || user.suspended) throw Object.assign(new Error('Your teacher account is suspended or unavailable.'), { status: 403 });
+  return Array.isArray(user.permissions?.allowedBatchIds) ? user.permissions.allowedBatchIds.map(String) : [];
+}
 function requireTeacherPermission(request, state, permission, batchId = '') {
   const session = requireTeacher(request);
   if (session.role === 'admin') return session;
   const user = state.users.find(item => item.id === session.sub && item.role === 'teacher');
   if (!user || user.suspended || !user.permissions?.[permission]) throw Object.assign(new Error('Your teacher account does not have permission for this action.'), { status: 403 });
-  const allowed = Array.isArray(user.permissions.allowedBatchIds) ? user.permissions.allowedBatchIds : [];
-  if (batchId && allowed.length && !allowed.includes(batchId)) throw Object.assign(new Error('This batch is outside your teaching assignment.'), { status: 403 });
+  const allowed = teacherAllowedBatchIds(session, state);
+  if (batchId && !allowed.includes(batchId)) throw Object.assign(new Error('This batch is outside your teaching assignment.'), { status: 403 });
   return session;
 }
 function activeEnrollment(state, studentId) { return state.enrollments.find(enrollment => enrollment.studentId === studentId && enrollment.status === 'ACTIVE'); }
@@ -550,7 +557,7 @@ function sessionHeaders(user) {
   const token = issueSession(user);
   return {
     token,
-    headers: { 'set-cookie': `nios_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=43200${isProduction ? '; Secure' : ''}` }
+    headers: { 'set-cookie': `nios_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200${isProduction ? '; Secure' : ''}` }
   };
 }
 function batchFrom(input, existing = {}) {
@@ -633,10 +640,10 @@ function targetForBatch(input, state) {
 }
 function classroomView(item) {
   const start = new Date(item.startsAt).getTime(), end = start + Number(item.durationMinutes || 60) * 60_000, current = Date.now();
-  const { hostUrl, ...safe } = item;
-  return { ...safe, liveUrl: item.restricted ? null : safe.liveUrl, joinEnabled: !item.restricted && current >= start - 10 * 60_000 && current < end, isPast: current >= end, recordingAvailable: !item.restricted && Boolean(item.recordingUrl) && current >= end };
+  const { hostUrl, ...safe } = item, joinEnabled = !item.restricted && current >= start - 10 * 60_000 && current < end;
+  return { ...safe, liveUrl: joinEnabled ? safe.liveUrl : null, joinEnabled, isPast: current >= end, recordingAvailable: !item.restricted && Boolean(item.recordingUrl) && current >= end };
 }
-function teacherClassroomView(item) { return { ...classroomView(item), hostUrl: item.hostUrl || null }; }
+function teacherClassroomView(item) { const studentView = classroomView(item); return { ...studentView, liveUrl: item.liveUrl || null, hostUrl: item.hostUrl || null }; }
 const attendanceStatuses = new Set(['Present', 'Late', 'Excused', 'Absent']);
 function liveClassHasEnded(item) {
   const start = Date.parse(item.startsAt);
@@ -703,10 +710,13 @@ const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 async function serveStatic(pathname, response, request) {
   // Never expose backend configuration, state, credentials or QA artifacts.
   if (pathname.includes('\\') || pathname.split('/').some(part => part.startsWith('.')) || pathname.startsWith('/portal-service/')) return send(response, 404, { error: 'Not found' });
-  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
+  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
   let requested = pathname === '/' ? '/index.html' : (aliases[pathname] || pathname);
   if (!extname(requested)) requested += '.html';
-  const protectedDesk = ['/dashboard', '/student-app', '/student-app.html', '/student-desk.html', '/active-student-dashboard.html', '/batch-hub.html', '/live-classes', '/homework'].includes(pathname);
+  const protectedDesk = ['/dashboard', '/student-app', '/student-app.html', '/student-desk.html', '/active-student-dashboard.html', '/pending-admission-dashboard.html', '/payment-pending.html', '/batch-hub.html', '/live-classes', '/homework', '/checkout', '/checkout.html', '/checkout-v2.html', '/admission-intake', '/admission-intake.html', '/application-wizard.html', '/admission-wizard-v2.html'].includes(pathname);
+  const protectedAdmin = /^\/admin(?:[./-]|$)/.test(pathname) || pathname === '/admission-admin.html';
+  const protectedTeacher = ['/teacher-portal', '/teacher-portal.html', '/teacher-portal-v2.html'].includes(pathname);
+  let sessionBootstrapRole = '';
   // A stale browser-side course draft must not take a paid learner back into
   // admission intake. Keep the server-authorized desk as the routing source.
   if (pathname === '/admission-intake' || pathname === '/admission-intake.html') {
@@ -719,7 +729,15 @@ async function serveStatic(pathname, response, request) {
       }
     }
   }
-  if (protectedDesk) { const session = readSession(request); if (!session?.studentId) requested = '/auth-v2.html'; else { const state = await readState(), paid = paidEnrollment(state, session.studentId), application = applicationEnrollment(state, session.studentId), wantsStudentApp = pathname === '/student-app' || pathname === '/student-app.html'; if (wantsStudentApp && paid) requested = '/student-app.html'; else if (paid?.status === 'ACTIVE') requested = pathname === '/dashboard' || pathname === '/student-desk.html' || pathname === '/active-student-dashboard.html' ? '/active-student-dashboard.html' : '/batch-hub.html'; else requested = paid ? '/pending-admission-dashboard.html' : application ? '/payment-pending.html' : '/auth-v2.html'; } }
+  if (protectedAdmin) {
+    const session = readSession(request);
+    if (session?.role !== 'admin') requested = '/auth-v2.html';
+    else sessionBootstrapRole = 'admin';
+  } else if (protectedTeacher) {
+    const session = readSession(request);
+    if (!['teacher', 'admin'].includes(session?.role)) requested = '/auth-v2.html';
+    else sessionBootstrapRole = session.role;
+  } else if (protectedDesk) { const session = readSession(request); if (!session?.studentId) requested = '/auth-v2.html'; else { sessionBootstrapRole = 'student'; const state = await readState(), paid = paidEnrollment(state, session.studentId), application = applicationEnrollment(state, session.studentId), wantsStudentApp = pathname === '/student-app' || pathname === '/student-app.html'; if (wantsStudentApp && paid) requested = '/student-app.html'; else if (paid?.status === 'ACTIVE') requested = pathname === '/dashboard' || pathname === '/student-desk.html' || pathname === '/active-student-dashboard.html' ? '/active-student-dashboard.html' : '/batch-hub.html'; else requested = paid ? '/pending-admission-dashboard.html' : application ? '/payment-pending.html' : '/auth-v2.html'; } }
   const file = resolve(root, `.${requested}`);
   if (!file.startsWith(root)) return send(response, 403, { error: 'Forbidden' });
   try {
@@ -730,11 +748,16 @@ async function serveStatic(pathname, response, request) {
       'content-type': mime[extension] || 'application/octet-stream',
       'x-content-type-options': 'nosniff',
       etag,
-      'cache-control': protectedDesk ? 'private, no-store' : (isAppShell ? 'no-cache' : 'public, max-age=3600, stale-while-revalidate=86400'),
-      ...(protectedDesk ? { vary: 'Cookie' } : {})
+      'cache-control': (protectedDesk || protectedAdmin || protectedTeacher) ? 'private, no-store' : (isAppShell ? 'no-cache' : 'public, max-age=3600, stale-while-revalidate=86400'),
+      ...((protectedDesk || protectedAdmin || protectedTeacher) ? { vary: 'Cookie' } : {})
     };
     if (request.headers['if-none-match'] === etag) { response.writeHead(304, headers); return response.end(); }
-    const content = await readFile(file); response.writeHead(200, headers); response.end(content);
+    let content = await readFile(file);
+    if (sessionBootstrapRole && extension === '.html') {
+      const bootstrap = `<script>try{if(!sessionStorage.getItem('niosSession'))sessionStorage.setItem('niosSession',JSON.stringify({id:'cookie-session',role:'${sessionBootstrapRole}'}));}catch{}</script>`;
+      content = Buffer.from(content.toString('utf8').replace('</head>', `${bootstrap}</head>`), 'utf8');
+    }
+    response.writeHead(200, headers); response.end(content);
   }
   catch { send(response, 404, { error: 'Not found' }); }
 }
@@ -785,7 +808,7 @@ const server = createServer(async (request, response) => {
       const session = sessionHeaders(user);
       return send(response, 200, { user: publicUser(user), token: session.token }, session.headers);
     }
-    if (method === 'POST' && path === '/api/auth/logout') return send(response, 200, { ok: true }, { 'set-cookie': `nios_session=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${isProduction ? '; Secure' : ''}` });
+    if (method === 'POST' && path === '/api/auth/logout') return send(response, 200, { ok: true }, { 'set-cookie': `nios_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${isProduction ? '; Secure' : ''}` });
     if (method === 'POST' && path === '/api/auth/accept-invite') { const input = await body(request), token = String(input.token || ''), password = String(input.password || ''); if (token.length < 32 || password.length < 12) return send(response, 422, { error: 'Use a valid invitation and a password of at least 12 characters.' }); const tokenHash = createHash('sha256').update(token).digest('hex'); const accepted = await updateState(state => { const user = state.users.find(item => item.inviteTokenHash === tokenHash && Date.parse(item.inviteExpiresAt || '') > Date.now()); if (!user) throw Object.assign(new Error('This invitation is invalid or expired.'), { status: 410 }); user.passwordHash = hashPassword(password); user.requiresPasswordSetup = false; delete user.inviteTokenHash; delete user.inviteExpiresAt; user.passwordSetAt = now(); state.audit.push({ id: uid('audit'), at: now(), action: 'staff.invite-accepted', staffId: user.id, role: user.role }); return user; }); return send(response, 200, { user: publicUser(accepted) }); }
     if (method === 'GET' && path === '/api/auth/me') { const session = readSession(request); if (!session) return send(response, 401, { error: 'Sign-in is required.' }); const state = await readState(), user = state.users.find(item => item.id === session.sub); if (!user) return send(response, 401, { error: 'Account not found.' }); const student = user.studentId ? state.students.find(item => item.id === user.studentId) : null; return send(response, 200, { user: publicUser(user), profile: student ? publicStudent(student, state) : null }); }
     if (method === 'POST' && path === '/api/enquiries') {
@@ -833,7 +856,7 @@ const server = createServer(async (request, response) => {
     if (method === 'GET' && path === '/api/admission/intake') {
       const state = await readState(), access = requireApplicationEnrollment(request, state, String(url.searchParams.get('batchId') || '')), student = state.students.find(item => item.id === access.session.studentId);
       const batch = state.batches.find(item => item.id === access.enrollment.batchId);
-      return send(response, 200, { profile: publicStudent(student, state), enrollment: publicEnrollment(access.enrollment, state), subjectOptions: admissionSubjectOptions(batch), requiredDocuments: requiredAdmissionDocuments, documents: state.admissionDocuments.filter(item => item.enrollmentId === access.enrollment.id).map(publicAdmissionDocument), canSubmit: (access.enrollment.selectedSubjects || []).length > 0 && requiredAdmissionDocuments.every(requirement => state.admissionDocuments.some(document => document.enrollmentId === access.enrollment.id && document.type === requirement.type)) });
+      return send(response, 200, { profile: publicStudent(student, state), enrollment: publicEnrollment(access.enrollment, state), subjectOptions: admissionSubjectOptions(batch), requiredDocuments: requiredAdmissionDocuments, documents: state.admissionDocuments.filter(item => item.enrollmentId === access.enrollment.id).map(publicAdmissionDocument), syncMode: process.env.NIOS_SYNC_MODE || 'manual', canSubmit: (access.enrollment.selectedSubjects || []).length > 0 && requiredAdmissionDocuments.every(requirement => state.admissionDocuments.some(document => document.enrollmentId === access.enrollment.id && document.type === requirement.type)) });
     }
     if (method === 'PUT' && path === '/api/admission/intake') {
       const state = await readState(), access = requireApplicationEnrollment(request, state), input = await body(request), batch = state.batches.find(item => item.id === access.enrollment.batchId), selectedSubjects = admissionSubjects(input.subjects, admissionSubjectOptions(batch));
@@ -947,8 +970,8 @@ const server = createServer(async (request, response) => {
     if (method === 'POST' && syncMatch) { requireStudent(request, syncMatch[1]); const state = await readState(); if (!state.students.some(item => item.id === syncMatch[1])) return send(response, 404, { error: 'Student not found.' }); if (!state.vault[syncMatch[1]]) return send(response, 409, { error: 'A consented vault record is required before sync.' }); if (process.env.NIOS_SYNC_MODE === 'manual') return send(response, 202, { manual: true, message: 'Official status is updated by your academy after manual NIOS verification.' }); return send(response, 202, { job: await queueSync(syncMatch[1], 'manual') }); }
     const downloadMatch = path.match(/^\/api\/documents\/([^/]+)\/download$/);
     if (method === 'GET' && downloadMatch) { const state = await readState(), document = state.documents.find(item => item.id === downloadMatch[1]); if (!document?.storageKey) return send(response, 404, { error: 'No stored document is available.' }); requireStudent(request, document.studentId); const stored = await storage.get(document.storageKey); response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename="${document.fileName || 'document'}"` }); return response.end(stored.bytes); }
-    if (method === 'GET' && path === '/api/teacher/batches') { const session = requireTeacher(request), state = await readState(), user = state.users.find(item => item.id === session.sub), allowed = session.role === 'admin' ? [] : user?.permissions?.allowedBatchIds || []; return send(response, 200, state.batches.filter(batch => !allowed.length || allowed.includes(batch.id)).map(({ id, name, board, class: classLevel, stream, streamId }) => ({ id, name, board, classLevel, stream, streamId }))); }
-    if (method === 'GET' && path === '/api/teacher/live-classes') { const session = requireTeacher(request), state = await readState(), user = state.users.find(item => item.id === session.sub), allowed = session.role === 'admin' ? [] : user?.permissions?.allowedBatchIds || []; return send(response, 200, state.liveClasses.filter(item => !allowed.length || allowed.includes(item.batchId)).map(teacherClassroomView)); }
+    if (method === 'GET' && path === '/api/teacher/batches') { const session = requireTeacher(request), state = await readState(), allowed = teacherAllowedBatchIds(session, state); return send(response, 200, state.batches.filter(batch => session.role === 'admin' || allowed.includes(batch.id)).map(({ id, name, board, class: classLevel, stream, streamId }) => ({ id, name, board, classLevel, stream, streamId }))); }
+    if (method === 'GET' && path === '/api/teacher/live-classes') { const session = requireTeacher(request), state = await readState(), allowed = teacherAllowedBatchIds(session, state); return send(response, 200, state.liveClasses.filter(item => session.role === 'admin' || allowed.includes(item.batchId)).map(teacherClassroomView)); }
     const attendanceRosterMatch = path.match(/^\/api\/teacher\/live-classes\/([^/]+)\/attendance$/);
     if (method === 'GET' && attendanceRosterMatch) {
       const state = await readState(), { liveClass } = attendanceClassAccess(request, state, attendanceRosterMatch[1]);
@@ -1028,7 +1051,7 @@ const server = createServer(async (request, response) => {
       const storageKey = `materials/${target.batchId}/${target.subjectCode}/${Date.now()}-${file.fileName}`; await storage.put(storageKey, file.bytes, file.mimeType);
       const created = await updateState(data => { const item = { id: uid('material'), ...target, title, materialType, fileName: file.fileName, mimeType: file.mimeType, storageKey, createdBy: staff.sub, createdAt: now() }; data.materials.push(item); data.audit.push({ id: uid('audit'), at: now(), action: 'material.uploaded', batchId: item.batchId, materialId: item.id, staffId: staff.sub }); return item; }); return send(response, 201, { ...created, downloadable: true });
     }
-    if (method === 'GET' && path === '/api/teacher/submissions') { const state = await readState(), batchId = url.searchParams.get('batchId'); requireTeacherPermission(request, state, 'gradeSubmissions', batchId || ''); const records = state.submissions.filter(item => !batchId || state.homework.find(task => task.id === item.homeworkId)?.batchId === batchId).map(item => ({ ...item, student: state.students.find(student => student.id === item.studentId)?.name || 'Student', homework: state.homework.find(task => task.id === item.homeworkId) || null })); return send(response, 200, records); }
+    if (method === 'GET' && path === '/api/teacher/submissions') { const state = await readState(), batchId = url.searchParams.get('batchId'), session = requireTeacherPermission(request, state, 'gradeSubmissions', batchId || ''), allowed = teacherAllowedBatchIds(session, state); const records = state.submissions.filter(item => { const task = state.homework.find(record => record.id === item.homeworkId); return Boolean(task) && (!batchId || task.batchId === batchId) && (session.role === 'admin' || allowed.includes(task.batchId)); }).map(item => ({ ...item, student: state.students.find(student => student.id === item.studentId)?.name || 'Student', homework: state.homework.find(task => task.id === item.homeworkId) || null })); return send(response, 200, records); }
     const evaluateMatch = path.match(/^\/api\/teacher\/submissions\/([^/]+)$/);
     if (method === 'PUT' && evaluateMatch) { const input = await body(request), permissionState = await readState(), permissionSubmission = permissionState.submissions.find(item => item.id === evaluateMatch[1]), permissionHomework = permissionSubmission && permissionState.homework.find(item => item.id === permissionSubmission.homeworkId), staff = requireTeacherPermission(request, permissionState, 'gradeSubmissions', permissionHomework?.batchId || ''), grade = String(input.grade || '').trim(), feedback = String(input.feedback || '').trim(), audioFeedbackUrl = String(input.audioFeedbackUrl || '').trim(); if (!isSafeString(grade, 30) || !isSafeString(feedback, 1200) || (audioFeedbackUrl && !/^https:\/\//.test(audioFeedbackUrl))) return send(response, 422, { error: 'Grade, text feedback, and an optional HTTPS audio-feedback URL are required.' }); const updated = await updateState(data => { const submission = data.submissions.find(item => item.id === evaluateMatch[1]); if (!submission) throw Object.assign(new Error('Submission not found.'), { status: 404 }); Object.assign(submission, { status: 'Graded', grade, feedback, audioFeedbackUrl: audioFeedbackUrl || null, gradedAt: now(), gradedBy: staff.sub }); data.audit.push({ id: uid('audit'), at: now(), action: 'homework.graded', submissionId: submission.id, staffId: staff.sub }); return submission; }); emit(updated.studentId, 'homework.graded', { submissionId: updated.id, grade: updated.grade }); return send(response, 200, updated); }
     if (method === 'GET' && path === '/api/admin/staff') { const state = await readState(); requireSuperAdmin(request, state); return send(response, 200, { staff: state.users.filter(user => ['admin', 'teacher'].includes(user.role)).map(user => ({ ...publicUser(user), protectedAccount: Boolean(user.protectedAccount), suspended: Boolean(user.suspended), requiresPasswordSetup: Boolean(user.requiresPasswordSetup) })), batches: state.batches.map(({ id, name }) => ({ id, name })) }); }
@@ -1058,8 +1081,8 @@ const server = createServer(async (request, response) => {
     if (method === 'GET' && path === '/api/admin/batches') { requireAdmin(request); const state = await readState(); return send(response, 200, state.batches); }
     if (method === 'POST' && path === '/api/admin/batches') { requireAdmin(request); const input = await body(request); const created = await updateState(state => { const batch = batchFrom(input); state.batches.push(batch); state.audit.push({ id: uid('audit'), at: now(), action: 'batch.created', batchId: batch.id }); return batch; }); return send(response, 201, created); }
     const batchMatch = path.match(/^\/api\/admin\/batches\/([^/]+)$/);
-    if (method === 'PUT' && batchMatch) { const admin = requireAdmin(request), input = await body(request); const updated = await updateState(state => { const index = state.batches.findIndex(batch => batch.id === batchMatch[1]); if (index < 0) throw Object.assign(new Error('Batch not found.'), { status: 404 }); const batch = batchFrom(input, state.batches[index]); state.batches[index] = batch; const offered = new Map(batch.subjects.map(subject => [String(subject.code), String(subject.name)])); for (const enrollment of state.enrollments.filter(item => item.batchId === batch.id)) { const before = Array.isArray(enrollment.selectedSubjects) ? enrollment.selectedSubjects : []; const selectedSubjects = before.filter(subject => offered.get(String(subject.code)) === String(subject.name)); if (selectedSubjects.length !== before.length) { enrollment.selectedSubjects = selectedSubjects; enrollment.subjectAccessUpdatedAt = now(); enrollment.subjectAccessUpdatedBy = admin.sub; enrollment.updatedAt = now(); state.audit.push({ id: uid('audit'), at: now(), action: 'enrollment.subject-access-pruned', enrollmentId: enrollment.id, studentId: enrollment.studentId, batchId: batch.id, staffId: admin.sub }); } } state.audit.push({ id: uid('audit'), at: now(), action: 'batch.updated', batchId: batch.id, staffId: admin.sub }); return batch; }); return send(response, 200, updated); }
-    if (method === 'DELETE' && batchMatch) { requireAdmin(request); const removed = await updateState(state => { const index = state.batches.findIndex(batch => batch.id === batchMatch[1]); if (index < 0) throw Object.assign(new Error('Batch not found.'), { status: 404 }); const [batch] = state.batches.splice(index, 1); state.audit.push({ id: uid('audit'), at: now(), action: 'batch.deleted', batchId: batch.id }); return batch; }); return send(response, 200, { deleted: removed.id }); }
+    if (method === 'PUT' && batchMatch) { const admin = requireAdmin(request), input = await body(request); const updated = await updateState(state => { const index = state.batches.findIndex(batch => batch.id === batchMatch[1]); if (index < 0) throw Object.assign(new Error('Batch not found.'), { status: 404 }); const existing = state.batches[index], batch = batchFrom(input, existing), enrollments = state.enrollments.filter(item => item.batchId === existing.id); if (enrollments.length) { if (batch.board !== existing.board || batch.class !== existing.class || batch.stream !== existing.stream || batch.streamId !== existing.streamId) throw Object.assign(new Error('Board, class, stream and stream ID are locked after students enroll. Create a new batch for a new cohort.'), { status: 409 }); const offered = new Map(batch.subjects.map(subject => [String(subject.code), String(subject.name)])); const affected = enrollments.flatMap(enrollment => (enrollment.selectedSubjects || []).filter(subject => offered.get(String(subject.code)) !== String(subject.name))); if (affected.length) throw Object.assign(new Error('This change would remove a subject selected by an enrolled student. Keep that subject or create a new batch.'), { status: 409 }); } state.batches[index] = batch; state.audit.push({ id: uid('audit'), at: now(), action: 'batch.updated', batchId: batch.id, staffId: admin.sub }); return batch; }); return send(response, 200, updated); }
+    if (method === 'DELETE' && batchMatch) { requireAdmin(request); const removed = await updateState(state => { const index = state.batches.findIndex(batch => batch.id === batchMatch[1]); if (index < 0) throw Object.assign(new Error('Batch not found.'), { status: 404 }); const hasDependents = [state.enrollments, state.payments, state.liveClasses, state.homework, state.materials].some(records => records.some(record => record.batchId === batchMatch[1])); if (hasDependents) throw Object.assign(new Error('This batch already has student or learning records. Move it to draft instead of deleting it.'), { status: 409 }); const [batch] = state.batches.splice(index, 1); state.audit.push({ id: uid('audit'), at: now(), action: 'batch.deleted', batchId: batch.id }); return batch; }); return send(response, 200, { deleted: removed.id }); }
     if (method === 'GET' && path === '/api/admin/students') { requireAdmin(request); const state = await readState(); return send(response, 200, state.students.map(student => publicStudent(student, state))); }
     const adminEnrollmentSubjectsMatch = path.match(/^\/api\/admin\/enrollments\/([^/]+)\/subjects$/);
     if (adminEnrollmentSubjectsMatch && method === 'GET') { requireAdmin(request); const state = await readState(), enrollment = state.enrollments.find(item => item.id === adminEnrollmentSubjectsMatch[1]); if (!enrollment) return send(response, 404, { error: 'Enrollment not found.' }); const student = state.students.find(item => item.id === enrollment.studentId), batch = state.batches.find(item => item.id === enrollment.batchId); if (!student || !batch) return send(response, 404, { error: 'The enrolled student or batch is no longer available.' }); return send(response, 200, { student: { id: student.id, name: student.name, email: student.email }, enrollment: publicEnrollment(enrollment, state), subjectOptions: admissionSubjectOptions(batch), selectedSubjects: studentSubjectsForEnrollment(student, enrollment, state) }); }

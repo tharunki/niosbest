@@ -13,11 +13,13 @@ document.querySelector('#resourceSections').innerHTML = resourceSections.map(([i
 ).join('');
 function render() {
   const query = searchField.value.trim().toLowerCase();
+  const niosCatalogueSelected = active === 'All' || active === 'NIOS';
+  const boardName = active === 'CBSE' ? 'CBSE Private' : active;
   let count = 0;
   for (const [id, , kind] of resourceSections) {
     const level = document.getElementById(id + 'Class').value;
-    const matches = subjectCatalogue[level].filter(subject =>
-      (active === 'All' || active === 'NIOS') && ('NIOS Class ' + level + ' ' + subject + ' ' + kind).toLowerCase().includes(query));
+    const matches = niosCatalogueSelected ? subjectCatalogue[level].filter(subject =>
+      ('NIOS Class ' + level + ' ' + subject + ' ' + kind).toLowerCase().includes(query)) : [];
     count += matches.length;
     const list = document.getElementById(id + 'List');
     const fragment = document.createDocumentFragment();
@@ -31,7 +33,7 @@ function render() {
       link.setAttribute('aria-label', 'Buy Class ' + level + ' ' + subject + ' ' + kind + ' for ₹' + price);
       card.append(heading, copy, link); fragment.append(card);
     }
-    if (!matches.length) { const empty = document.createElement('p'); empty.textContent = 'No resources match this board, class and search.'; fragment.append(empty); }
+    if (!matches.length) { const empty = document.createElement('p'); empty.textContent = niosCatalogueSelected ? 'No resources match this class and search.' : `${boardName} subject PDFs are being prepared. Choose NIOS to browse the current catalogue.`; fragment.append(empty); }
     list.replaceChildren(fragment);
   }
   document.querySelector('#found').textContent = count;
