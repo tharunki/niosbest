@@ -5,9 +5,12 @@ const SESSION_DURATION_MS = 12 * 60 * 60 * 1000;
 const DOWNLOAD_DURATION_MS = 24 * 60 * 60 * 1000;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const MAX_LOGIN_ATTEMPTS = 5;
+const CHECKOUT_WINDOW_MS = 10 * 60 * 1000;
+const MAX_CHECKOUT_ATTEMPTS = 12;
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(['sample', 'pyq', 'mcq', 'important']);
 const ALLOWED_CLASSES = new Set(['10', '11', '12']);
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const scienceLessons = [
   'Chemical Reactions and Equations', 'Acids, Bases and Salts', 'Metals and Non-metals',
@@ -16,6 +19,8 @@ const scienceLessons = [
   'The Human Eye and the Colourful World', 'Electricity', 'Magnetic Effects of Electric Current',
   'Our Environment', 'Sustainable Management of Natural Resources'
 ];
+
+const libraryPages = new Set(['/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html']);
 
 function securityHeaders(contentType = 'application/json; charset=utf-8') {
   return {
@@ -236,6 +241,61 @@ async function cleanCard(env, input, existing = null) {
   };
 }
 
+function uniqueSlugFromSet(value, usedSlugs) {
+  const base = slugify(value);
+  let candidate = base;
+  let attempt = 2;
+  while (usedSlugs.has(candidate)) candidate = `${base.slice(0, 104)}-${attempt++}`;
+  usedSlugs.add(candidate);
+  return candidate;
+}
+
+function importTimestamp(value, fallback) {
+  const timestamp = new Date(String(value || '')).getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
+}
+
+function cleanImportedCard(input, usedSlugs, pdfFiles) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('The backup contains an invalid card.');
+  const type = String(input.type || '');
+  const className = String(input.className || '');
+  const subject = String(input.subject || '').trim().slice(0, 80);
+  const title = String(input.title || '').trim().slice(0, 140);
+  const description = String(input.description || '').trim().slice(0, 500);
+  const price = Math.round(Number(input.price));
+  let link = String(input.link || '').trim();
+  let fileKey = String(input.fileKey || '').trim();
+  const isBundle = input.isBundle === true || input.isBundle === 'true' || input.isBundle === 1 || input.isBundle === '1';
+  if (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className) || !subject || !title || !Number.isFinite(price) || price < 1 || price > 9999) {
+    throw new Error('The backup contains invalid card details.');
+  }
+  if (link) {
+    const url = new URL(link);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('The backup contains an invalid preview link.');
+    link = url.href;
+  }
+  if (fileKey) {
+    fileKey = safePdfFilename(fileKey);
+    if (!pdfFiles.has(fileKey)) throw new Error(`Upload ${fileKey} before importing a card that uses it.`);
+  }
+  const now = new Date().toISOString();
+  return {
+    id: UUID_PATTERN.test(String(input.id || '')) ? String(input.id) : crypto.randomUUID(),
+    type,
+    className,
+    subject,
+    title,
+    description,
+    price: String(price),
+    link,
+    fileKey,
+    isBundle,
+    slug: uniqueSlugFromSet(input.slug || `${type}-class-${className}-${subject}-${title}`, usedSlugs),
+    createdAt: importTimestamp(input.createdAt, now),
+    updatedAt: now
+  };
+}
+
 function cardInsertStatement(env, card) {
   return env.DB.prepare('INSERT INTO cards (id,type,class_name,subject,title,description,price,link,file_key,is_bundle,slug,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
     .bind(card.id, card.type, card.className, card.subject, card.title, card.description, Number(card.price), card.link, card.fileKey, Number(card.isBundle), card.slug, card.createdAt, card.updatedAt);
@@ -387,14 +447,31 @@ async function updateOrderStatus(env, orderId, status, paymentId = null, fulfill
 
 async function hasActivePaidDownload(env, cardId) {
   const cutoff = new Date(Date.now() - DOWNLOAD_DURATION_MS).toISOString();
-  const result = await env.DB.prepare('SELECT 1 AS active FROM orders WHERE card_id = ? AND fulfilled_at IS NOT NULL AND fulfilled_at >= ? LIMIT 1').bind(cardId, cutoff).first();
+  // A webhook can confirm payment before the browser exchanges it for a link.
+  // Keep the card immutable for that recovery window plus the 24-hour link window.
+  const result = await env.DB.prepare("SELECT 1 AS active FROM orders WHERE card_id = ? AND status IN ('captured','fulfilled') AND recovery_expires_at >= ? LIMIT 1").bind(cardId, cutoff).first();
   return Boolean(result?.active);
 }
 
 async function hasAnyActivePaidDownloads(env) {
   const cutoff = new Date(Date.now() - DOWNLOAD_DURATION_MS).toISOString();
-  const result = await env.DB.prepare('SELECT 1 AS active FROM orders WHERE fulfilled_at IS NOT NULL AND fulfilled_at >= ? LIMIT 1').bind(cutoff).first();
+  const result = await env.DB.prepare("SELECT 1 AS active FROM orders WHERE status IN ('captured','fulfilled') AND recovery_expires_at >= ? LIMIT 1").bind(cutoff).first();
   return Boolean(result?.active);
+}
+
+async function hasActivePaidDownloadForFile(env, filename) {
+  const cutoff = new Date(Date.now() - DOWNLOAD_DURATION_MS).toISOString();
+  const result = await env.DB.prepare(`SELECT 1 AS active
+    FROM orders INNER JOIN cards ON cards.id = orders.card_id
+    WHERE cards.file_key = ? AND orders.status IN ('captured','fulfilled') AND orders.recovery_expires_at >= ?
+    LIMIT 1`).bind(filename, cutoff).first();
+  return Boolean(result?.active);
+}
+
+async function ensureFileCanChange(env, filename) {
+  if (await hasActivePaidDownloadForFile(env, filename)) {
+    throw new Error('This PDF has a paid purchase that may still be downloaded. Keep its content unchanged until the access window expires (up to 48 hours).');
+  }
 }
 
 function razorpayAuthorization(env) {
@@ -469,6 +546,21 @@ async function clearLoginAttempts(request, env) {
   await env.DB.prepare('DELETE FROM login_attempts WHERE client_hash = ?').bind(ipHash).run();
 }
 
+async function checkoutAllowed(request, env) {
+  const ipHash = await sha256Hex(request.headers.get('CF-Connecting-IP') || 'unknown');
+  const attempt = await env.DB.prepare('SELECT count, window_started_at FROM checkout_attempts WHERE client_hash = ?').bind(ipHash).first();
+  return !attempt || Date.now() - Number(attempt.window_started_at) >= CHECKOUT_WINDOW_MS || Number(attempt.count) < MAX_CHECKOUT_ATTEMPTS;
+}
+
+async function recordCheckoutAttempt(request, env) {
+  const ipHash = await sha256Hex(request.headers.get('CF-Connecting-IP') || 'unknown');
+  const now = Date.now();
+  await env.DB.prepare(`INSERT INTO checkout_attempts (client_hash,count,window_started_at) VALUES (?,?,?)
+    ON CONFLICT(client_hash) DO UPDATE SET count=CASE WHEN checkout_attempts.window_started_at < ? THEN 1 ELSE checkout_attempts.count + 1 END,
+    window_started_at=CASE WHEN checkout_attempts.window_started_at < ? THEN ? ELSE checkout_attempts.window_started_at END`)
+    .bind(ipHash, 1, now, now - CHECKOUT_WINDOW_MS, now - CHECKOUT_WINDOW_MS, now).run();
+}
+
 function adminCookie(token, maxAge, secure) {
   return `admin_session=${token}; HttpOnly;${secure ? ' Secure;' : ''} SameSite=Strict; Path=/; Max-Age=${maxAge}`;
 }
@@ -535,11 +627,19 @@ function isWorkersDev(url) {
   return new URL(url).hostname.endsWith('.workers.dev');
 }
 
+async function renderLibraryPage(request, env, url) {
+  const response = await env.ASSETS.fetch(request);
+  if (!isWorkersDev(request.url)) return response;
+  const headers = new Headers(response.headers);
+  headers.set('X-Robots-Tag', 'noindex, nofollow');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 async function renderSitemap(request, env) {
   const origin = new URL(request.url).origin;
   const pages = ['/', '/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html'];
   const fixed = pages.map((page) => `  <url><loc>${escapeXml(`${origin}${page}`)}</loc></url>`);
-  const cards = await readCards(env);
+  const cards = (await readCards(env)).filter((card) => card.fileKey);
   const cardUrls = cards.map((card) => `  <url><loc>${escapeXml(`${origin}/paper/${card.slug}`)}</loc><lastmod>${card.updatedAt.slice(0, 10)}</lastmod></url>`);
   return text(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${[...fixed, ...cardUrls].join('\n')}\n</urlset>\n`, 200, 'application/xml; charset=utf-8');
 }
@@ -556,6 +656,7 @@ function paperPageHtml(request, paper) {
   const origin = new URL(request.url).origin;
   const title = `${paper.title} | Best Education`;
   const description = paper.description || 'Chapter-wise study material for focused revision.';
+  const indexable = paper.available && !isWorkersDev(request.url);
   const productSchema = JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'LearningResource',
@@ -566,7 +667,7 @@ function paperPageHtml(request, paper) {
     provider: { '@type': 'EducationalOrganization', name: 'Best Education' },
     offers: { '@type': 'Offer', price: paper.price, priceCurrency: 'INR', availability: paper.available ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder', url: `${origin}/paper/${paper.slug}` }
   }).replace(/</g, '\\u003c');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${isWorkersDev(request.url) ? 'noindex,nofollow' : 'index,follow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:type" content="product"><meta property="og:site_name" content="Best Education"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:image" content="${escapeHtml(`${origin}/logo.png`)}"><meta name="twitter:card" content="summary_large_image"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"><script type="application/ld+json">${productSchema}</script></head><body><header><a class="brand" href="/index.html"><img src="/logo.png" alt="Best Education logo" width="46" height="46">Best <strong>Education</strong></a><a href="/index.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}"><link rel="canonical" href="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:type" content="product"><meta property="og:site_name" content="Best Education"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:image" content="${escapeHtml(`${origin}/logo.png`)}"><meta name="twitter:card" content="summary_large_image"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"><script type="application/ld+json">${productSchema}</script></head><body><header><a class="brand" href="/index.html"><img src="/logo.png" alt="Best Education logo" width="46" height="46">Best <strong>Education</strong></a><a href="/index.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script></body></html>`;
 }
 
 async function renderPaperPage(request, env, slug) {
@@ -616,6 +717,8 @@ async function api(request, env, url) {
     const card = await getCardBySlug(env, checkoutMatch[1]);
     if (!card?.fileKey || !await env.PAPERS.head(card.fileKey)) return json({ error: 'This paper is not ready for secure purchase yet.' }, 404);
     if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return json({ error: 'Secure payments are not configured yet. The administrator must add Razorpay credentials.' }, 503);
+    if (!await checkoutAllowed(request, env)) return json({ error: 'Too many checkout attempts from this connection. Please wait 10 minutes and try again.' }, 429);
+    await recordCheckoutAttempt(request, env);
     const receipt = `best_${crypto.randomUUID().replace(/-/g, '').slice(0, 30)}`;
     const upstream = await fetch('https://api.razorpay.com/v1/orders', {
       method: 'POST',
@@ -676,12 +779,14 @@ async function api(request, env, url) {
         const declaredSize = Number(request.headers.get('Content-Length') || 0);
         if (Number.isFinite(declaredSize) && declaredSize > MAX_PDF_BYTES) throw new Error('Upload a PDF smaller than 25 MB.');
         if (!request.body) throw new Error('Choose a valid PDF file.');
+        await ensureFileCanChange(env, filename);
         await env.PAPERS.put(filename, pdfUploadStream(request.body), { httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${filename}"` } });
         return json({ file: filename }, 201);
       }
       const input = await readJson(request, Math.ceil(MAX_PDF_BYTES * 1.4));
       const filename = safePdfFilename(input.filename);
       const pdf = decodePdfUpload(input.data);
+      await ensureFileCanChange(env, filename);
       await env.PAPERS.put(filename, pdf, { httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${filename}"` } });
       return json({ file: filename }, 201);
     } catch (error) {
@@ -732,12 +837,13 @@ async function api(request, env, url) {
       const source = Array.isArray(input) ? input : input.cards;
       if (!Array.isArray(source) || source.length > 500) throw new Error('Choose a valid backup with no more than 500 cards.');
       if (await hasAnyActivePaidDownloads(env)) throw new Error('Wait until active paid download links expire before importing a full card backup.');
+      const pdfFiles = new Set(await listPdfFiles(env));
+      const usedSlugs = new Set();
       const parsed = [];
       for (const item of source) {
-        const existing = item?.id ? { id: String(item.id), createdAt: String(item.createdAt || new Date().toISOString()) } : null;
-        parsed.push(await cleanCard(env, item, existing));
+        parsed.push(cleanImportedCard(item, usedSlugs, pdfFiles));
       }
-      if (new Set(parsed.map((card) => card.id)).size !== parsed.length || new Set(parsed.map((card) => card.slug)).size !== parsed.length) throw new Error('The backup contains duplicate cards.');
+      if (new Set(parsed.map((card) => card.id)).size !== parsed.length) throw new Error('The backup contains duplicate card IDs.');
       await env.DB.batch([env.DB.prepare('DELETE FROM cards'), ...parsed.map((card) => cardInsertStatement(env, card))]);
       return json({ count: parsed.length });
     } catch (error) { return json({ error: error.message || 'The backup could not be imported.' }, 400); }
@@ -754,6 +860,7 @@ export default {
       if (url.pathname === '/robots.txt') return renderRobots(request);
       const paperMatch = url.pathname.match(/^\/paper\/([a-z0-9-]+)$/i);
       if (paperMatch) return await renderPaperPage(request, env, paperMatch[1]);
+      if (libraryPages.has(url.pathname)) return await renderLibraryPage(request, env, url);
       return env.ASSETS.fetch(request);
     } catch (error) {
       console.error('Best Education Worker error', error);

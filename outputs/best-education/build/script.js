@@ -4,6 +4,8 @@ const paperGrid = document.querySelector('#paper-grid');
 const search = document.querySelector('#resource-search');
 const searchButton = document.querySelector('#search-button');
 let searchTimer;
+let activeSearchRequest;
+let searchRequestId = 0;
 
 function closeMenu() { nav?.classList.remove('open'); menuButton?.setAttribute('aria-expanded', 'false'); }
 menuButton?.addEventListener('click', () => { const isOpen = nav.classList.toggle('open'); menuButton.setAttribute('aria-expanded', String(isOpen)); });
@@ -28,22 +30,31 @@ function renderPapers(papers, message = '') {
   if (message) searchStatus.textContent = message;
 }
 async function fetchPapers(query = '', initial = false) {
+  const requestId = ++searchRequestId;
+  activeSearchRequest?.abort();
+  const controller = new AbortController();
+  activeSearchRequest = controller;
   paperGrid.setAttribute('aria-busy', 'true');
   const params = new URLSearchParams(query ? { q:query } : { type:'sample', class:'10', subject:'Science' });
   try {
-    const response = await fetch(`/api/papers?${params}`, { headers:{ Accept:'application/json' } });
+    const response = await fetch(`/api/papers?${params}`, { headers:{ Accept:'application/json' }, signal:controller.signal });
     if (!response.ok) throw new Error(); const data = await response.json(); const papers = Array.isArray(data.papers) ? data.papers : [];
+    if (requestId !== searchRequestId) return null;
     renderPapers(papers, initial ? 'Showing Class 10 Science sample papers.' : `${papers.length} result${papers.length === 1 ? '' : 's'} found.`);
     return papers;
-  } catch {
+  } catch (error) {
+    if (error.name === 'AbortError' || requestId !== searchRequestId) return null;
     const filtered = query ? fallbackPapers.filter(paper => `${paper.className} ${paper.subject} ${paper.title}`.toLowerCase().includes(query.toLowerCase())) : fallbackPapers;
     renderPapers(filtered, 'Showing available papers while the search service reconnects.'); return filtered;
+  } finally {
+    if (requestId === searchRequestId) activeSearchRequest = null;
   }
 }
 async function runSearch({ scroll = false } = {}) {
   const term = search.value.trim();
-  if (!term) { await fetchPapers('', true); searchStatus.textContent = 'Enter a class, subject, or chapter name.'; return; }
+  if (!term) { const papers = await fetchPapers('', true); if (papers !== null) searchStatus.textContent = 'Enter a class, subject, or chapter name.'; return; }
   searchStatus.textContent = 'Searching study material…'; const papers = await fetchPapers(term);
+  if (papers === null) return;
   if (papers.length && scroll) document.querySelector('#latest')?.scrollIntoView({ behavior:'smooth', block:'start' });
   if (!papers.length) {
     const matchingResource = [...document.querySelectorAll('.resource-card')].find(card => card.dataset.keywords.toLowerCase().includes(term.toLowerCase()));

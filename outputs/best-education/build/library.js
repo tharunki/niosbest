@@ -13,6 +13,7 @@ const labels = { sample: 'Sample Paper', pyq: 'Previous Year Questions', mcq: 'M
 const slugs = { sample: 'sample-papers.html', pyq: 'pyqs.html', mcq: 'mcqs.html', important: 'important-questions.html' };
 const seoTitle = `${labels[type]} for Classes 10, 11 & 12 | Best Education`;
 const seoDescription = `Buy chapter-wise ${labels[type].toLowerCase()} PDFs for Classes 10, 11 and 12. Lesson PDFs are ₹39 and complete bundles are ₹399.`;
+const seoOrigin = location.hostname.endsWith('.workers.dev') ? location.origin : 'https://www.ravitestpapers.in';
 document.title = seoTitle;
 
 function setMeta(attribute, name, content) {
@@ -21,19 +22,21 @@ function setMeta(attribute, name, content) {
   element.content = content;
 }
 setMeta('name', 'description', seoDescription);
-setMeta('name', 'robots', 'index, follow');
+setMeta('name', 'robots', location.hostname.endsWith('.workers.dev') ? 'noindex, nofollow' : 'index, follow');
 setMeta('property', 'og:type', 'website');
 setMeta('property', 'og:site_name', 'Best Education');
 setMeta('property', 'og:title', seoTitle);
 setMeta('property', 'og:description', seoDescription);
-setMeta('property', 'og:url', `https://www.ravitestpapers.in/${slugs[type]}`);
-setMeta('property', 'og:image', 'https://www.ravitestpapers.in/logo.png');
+setMeta('property', 'og:url', `${seoOrigin}/${slugs[type]}`);
+setMeta('property', 'og:image', `${seoOrigin}/logo.png`);
 setMeta('property', 'og:image:alt', 'Best Education logo');
-setMeta('name', 'twitter:card', 'summary_large_image');
-setMeta('name', 'twitter:image', 'https://www.ravitestpapers.in/logo.png');
+setMeta('name', 'twitter:card', 'summary');
+setMeta('name', 'twitter:image', `${seoOrigin}/logo.png`);
 setMeta('name', 'twitter:title', seoTitle);
 setMeta('name', 'twitter:description', seoDescription);
-const canonical = document.createElement('link'); canonical.rel = 'canonical'; canonical.href = `https://www.ravitestpapers.in/${slugs[type]}`; document.head.append(canonical);
+let canonical = document.head.querySelector('link[rel="canonical"]');
+if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.append(canonical); }
+canonical.href = `${seoOrigin}/${slugs[type]}`;
 document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="logo.png" alt="Best Education logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">Best <b>Education</b>'; });
 
 const grid = document.querySelector('#library-grid');
