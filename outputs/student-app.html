@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#6750d8">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="description" content="Secure batch-restricted Student App for NIOS Best Academy students.">
+  <link rel="manifest" href="/student-app.webmanifest">
+  <link rel="icon" href="/student-app-icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/student-app-icon.svg">
+  <link rel="stylesheet" href="/student-app.css">
+  <title>Student App — NIOS Best Academy</title>
+</head>
+<body>
+  <a class="skip" href="#studentView">Skip to your learning desk</a>
+  <main class="app">
+    <header class="topbar" aria-label="Student App header">
+      <a class="brand" href="/" aria-label="NIOS Best Academy home">
+        <span class="brand-mark" aria-hidden="true">N</span>
+        <span><strong>NIOS Best Academy</strong><span>Student App</span></span>
+      </a>
+      <div class="top-actions">
+        <button type="button" class="install-button" id="installButton">⇩ Install app</button>
+        <a class="icon-button" href="/dashboard" id="deskLink" aria-label="Open full Student Desk" title="Open full Student Desk">↗</a>
+        <button type="button" class="icon-button" id="signoutButton" aria-label="Sign out" title="Sign out" hidden>↪</button>
+      </div>
+    </header>
+
+    <section class="shell-state" id="loadingView" aria-live="polite">
+      <div class="loading-lines" aria-label="Loading your Student App"><i></i><i></i><i></i></div>
+    </section>
+
+    <section class="shell-state" id="guestView" hidden>
+      <div class="state-card">
+        <div class="state-icon" aria-hidden="true">⌁</div>
+        <h1>Sign in to your Student App</h1>
+        <p>Your batch, subjects, classes and documents appear here only after a secure student sign-in.</p>
+        <div class="state-actions"><a class="action-button primary" href="/login">Sign in</a><a class="action-button" href="/">Back to home</a></div>
+        <p class="state-note">Teachers and administrators use their own academy portals, not this app.</p>
+      </div>
+    </section>
+
+    <section class="shell-state" id="roleView" hidden>
+      <div class="state-card">
+        <div class="state-icon" aria-hidden="true">⌁</div>
+        <h1 id="roleTitle">This is the Student App</h1>
+        <p id="roleCopy">This app is reserved for enrolled student accounts.</p>
+        <div class="state-actions"><a class="action-button primary" id="roleLink" href="/">Open your portal</a><a class="action-button" href="/">Back to home</a></div>
+      </div>
+    </section>
+
+    <section class="shell-state" id="pendingView" hidden>
+      <div class="state-card">
+        <div class="state-icon" aria-hidden="true">◷</div>
+        <h1>Your Student App is getting ready</h1>
+        <p id="pendingCopy">Your account is secure. Complete the next admission step to unlock your batch learning space.</p>
+        <div class="state-actions"><a class="action-button primary" id="pendingLink" href="/dashboard">View admission status</a><a class="action-button" href="/contact.html#form">Ask the academy</a></div>
+        <p class="state-note">Your private learning materials are not saved on this device.</p>
+      </div>
+    </section>
+
+    <section class="shell-state" id="errorView" hidden>
+      <div class="state-card">
+        <div class="state-icon" aria-hidden="true">!</div>
+        <h1>We could not load your learning desk</h1>
+        <p id="errorCopy">Check your connection and try again.</p>
+        <div class="state-actions"><button type="button" class="action-button primary" id="retryButton">Try again</button><a class="action-button" href="/dashboard">Open Student Desk</a></div>
+      </div>
+    </section>
+
+    <section class="desk" id="studentView" hidden aria-live="polite">
+      <section class="hero" id="home">
+        <div class="hero-copy">
+          <p class="eyebrow">Your active learning space</p>
+          <h1 id="welcome">Welcome back</h1>
+          <p id="heroCopy">Loading your batch-restricted Student App.</p>
+          <div class="hero-bottom">
+            <div class="batch-chip"><span class="status-dot" id="accessDot"></span><span id="batchName">Checking your batch</span></div>
+            <button class="quick-refresh" id="refreshButton" type="button">↻ Refresh status</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="summary-grid" aria-label="Student summary">
+        <article class="summary"><b id="subjectCount">—</b><span>Selected subjects</span></article>
+        <article class="summary"><b class="accent" id="progressValue">—</b><span>Average readiness</span></article>
+        <article class="summary"><b class="warn" id="homeworkCount">—</b><span>Homework to do</span></article>
+        <article class="summary"><b class="accent" id="materialCount">—</b><span>Batch materials</span></article>
+      </section>
+
+      <section class="section" aria-labelledby="shortcutTitle">
+        <div class="section-head"><div><h2 id="shortcutTitle">Continue learning</h2><p>Only tools assigned to your active batch.</p></div></div>
+        <div class="shortcuts">
+          <a class="shortcut" href="/live-classes"><span class="shortcut-icon" aria-hidden="true">▣</span><b>Live classes</b><span id="classShortcutMeta">Batch schedule</span></a>
+          <a class="shortcut" href="/homework"><span class="shortcut-icon" aria-hidden="true">✓</span><b>Homework</b><span id="homeworkShortcutMeta">Teacher tasks</span></a>
+          <a class="shortcut" href="#materials"><span class="shortcut-icon" aria-hidden="true">⇩</span><b>Materials</b><span id="materialShortcutMeta">Your subjects</span></a>
+          <button class="shortcut assistant" type="button" id="assistantOpen"><span class="shortcut-icon" aria-hidden="true">✦</span><b>Ask Mira</b><span>Academic guidance</span></button>
+        </div>
+      </section>
+
+      <div class="content-grid">
+        <section class="section" id="subjects" aria-labelledby="subjectsTitle">
+          <div class="section-head"><div><h2 id="subjectsTitle">Your subject progress</h2><p>Based on your selected combination.</p></div><a class="section-link" href="/dashboard">Full desk ↗</a></div>
+          <div class="subject-list" id="subjectList"></div>
+        </section>
+        <section class="section" id="tasks" aria-labelledby="tasksTitle">
+          <div class="section-head"><div><h2 id="tasksTitle">Next steps</h2><p>Keep your admission and study plan moving.</p></div></div>
+          <div class="activity-list" id="activityList"></div>
+        </section>
+      </div>
+
+      <section class="section" id="classes" aria-labelledby="classesTitle">
+        <div class="section-head"><div><h2 id="classesTitle">Upcoming live classes</h2><p>Join links open only when your teacher enables them.</p></div><a class="section-link" href="/live-classes">See all ↗</a></div>
+        <div class="list" id="classList"></div>
+      </section>
+
+      <section class="section" id="materials" aria-labelledby="materialsTitle">
+        <div class="section-head"><div><h2 id="materialsTitle">Your batch materials</h2><p>Downloads stay protected by your student account.</p></div><a class="section-link" href="/live-classes">Open hub ↗</a></div>
+        <div class="list" id="materialList"></div>
+        <p class="note"><b>Private by design</b>Your material list is not stored offline. You need a current student sign-in to view or download it.</p>
+      </section>
+    </section>
+  </main>
+
+  <nav class="bottom-nav" id="bottomNav" aria-label="Student App navigation" hidden>
+    <button type="button" data-target="home" class="active"><span aria-hidden="true">⌂</span>Home</button>
+    <button type="button" data-target="subjects"><span aria-hidden="true">◫</span>Subjects</button>
+    <button type="button" data-target="classes"><span aria-hidden="true">▣</span>Classes</button>
+    <button type="button" data-target="tasks"><span aria-hidden="true">✓</span>Tasks</button>
+    <button type="button" class="nav-assistant" id="bottomAssistant"><span aria-hidden="true">✦</span>Mira</button>
+  </nav>
+
+  <aside class="assistant-sheet" id="assistantSheet" aria-label="Mira academic assistant" hidden>
+    <header class="assistant-head"><span class="mira-mark" aria-hidden="true">✦</span><span><strong>Mira · Academic Assistant</strong><small>Guidance based on your Student Desk · not an official NIOS source</small></span><button type="button" id="assistantClose" aria-label="Close Mira">×</button></header>
+    <div class="assistant-log" id="assistantLog" role="log" aria-live="polite"></div>
+    <div class="assistant-prompts" id="assistantPrompts" aria-label="Suggested questions"></div>
+    <form class="assistant-form" id="assistantForm"><input id="assistantInput" maxlength="1200" autocomplete="off" placeholder="Ask about your study or admission…" aria-label="Question for Mira" required><button type="submit">Send</button></form>
+    <div class="assistant-status" id="assistantStatus" role="status"></div>
+  </aside>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/student-app.js" defer></script>
+</body>
+</html>

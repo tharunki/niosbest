@@ -1,0 +1,11 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /admin
+Disallow: /dashboard
+Disallow: /teacher-portal
+Disallow: /login
+Disallow: /checkout
+Disallow: /payment-pending
+Disallow: /admission-intake
+Sitemap: https://niosbest.in/sitemap.xml

@@ -1,0 +1,11 @@
+{
+  "name": "academy-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test --grep-invert @production",
+    "test:security": "playwright test --grep @production",
+    "report": "playwright show-report"
+  },
+  "devDependencies": { "@playwright/test": "1.58.2" }
+}

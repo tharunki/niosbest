@@ -1,0 +1,14 @@
+# Never publish secrets, local student records, or generated uploads.
+outputs/portal-service/.env
+# The service and QA checks create state directories with several suffixes.
+outputs/portal-service/.portal-data*/
+outputs/portal-service/qa/test-results/
+outputs/portal-service/qa/playwright-report/
+outputs/portal-service/*.log
+*.log
+.DS_Store
+
+# Local editor and temporary files.
+.vscode/
+.idea/
+tmp/

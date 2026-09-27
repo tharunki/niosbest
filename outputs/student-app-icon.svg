@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" role="img" aria-label="NIOS Best Academy Student App">
+  <defs>
+    <linearGradient id="bg" x1="18" y1="12" x2="175" y2="184" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b5abff"/>
+      <stop offset=".52" stop-color="#806cf2"/>
+      <stop offset="1" stop-color="#4f3bbf"/>
+    </linearGradient>
+    <linearGradient id="page" x1="69" y1="55" x2="125" y2="142" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e6e2ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="192" height="192" rx="47" fill="#0c0c29"/>
+  <rect x="17" y="17" width="158" height="158" rx="39" fill="url(#bg)"/>
+  <path d="M57 55c18 0 31 6 39 17 8-11 21-17 39-17v75c-18 0-31 5-39 16-8-11-21-16-39-16V55Z" fill="url(#page)"/>
+  <path d="M96 72v74" stroke="#7b69dc" stroke-width="5" stroke-linecap="round"/>
+  <path d="M68 79c10 1 17 4 22 10M124 79c-10 1-17 4-22 10M68 101c10 1 17 4 22 10M124 101c-10 1-17 4-22 10" fill="none" stroke="#8a78e8" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="145" cy="52" r="13" fill="#55d9d0"/>
+  <path d="m139 52 4 4 8-9" fill="none" stroke="#0c0c29" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

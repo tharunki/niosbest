@@ -1,0 +1,20 @@
+{
+  "name": "NIOS Best Academy Student App",
+  "short_name": "Student App",
+  "description": "A secure, batch-restricted study desk for NIOS Best Academy students.",
+  "id": "/student-app.html",
+  "start_url": "/student-app.html",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0c0c29",
+  "theme_color": "#6750d8",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/student-app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

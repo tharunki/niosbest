@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Teacher Portal — NIOS Best Academy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>:root{--bg:#0c0c29;--panel:rgba(31,30,82,.84);--ink:#f4f2ff;--muted:#b5b1d2;--line:rgba(208,202,255,.16);--violet:#8977ff;--aqua:#55d9d0;--gold:#ffc36b}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 100% 0,rgba(91,70,216,.28),transparent 38%),var(--bg);font:16px/1.5 "DM Sans",sans-serif;color:var(--ink)}.wrap{width:min(100% - 36px,1200px);margin:auto}.top{padding:20px 0;display:flex;align-items:center;justify-content:space-between;gap:16px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:9px;text-decoration:none;color:#fff}.mark{height:39px;width:39px;border-radius:12px;display:grid;place-items:center;background:linear-gradient(145deg,#aa9dff,#604bda);font:800 17px "Plus Jakarta Sans"}.brand b{font:700 16px "Plus Jakarta Sans";display:block}.brand span{font-size:12px;color:var(--muted);display:block}.top a{font-size:13px;color:#d5cfff;text-decoration:none}.hero{padding:36px 0 24px}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.13em;color:#dfd9ff}.hero h1{font:600 clamp(30px,4vw,44px)/1.16 "Plus Jakarta Sans";letter-spacing:-.06em;margin:7px 0}.hero p{max-width:720px;color:#cbc7e5;font-size:14px;margin:0}.tabs{display:flex;gap:7px;margin:4px 0 18px;flex-wrap:wrap}.tabs button{border:1px solid var(--line);background:rgba(255,255,255,.04);color:var(--muted);border-radius:9px;padding:10px 12px;font:700 13px "DM Sans";cursor:pointer}.tabs button.active{background:rgba(137,119,255,.2);color:#fff}.screen{display:none}.screen.active{display:block}.grid{display:grid;grid-template-columns:1fr 1fr;gap:17px}.card{padding:20px;border:1px solid var(--line);border-radius:18px;background:var(--panel);box-shadow:0 18px 48px rgba(0,0,0,.2)}.card h2{font:600 19px "Plus Jakarta Sans";letter-spacing:-.04em;margin:0 0 13px}.field{margin-top:12px}.field label{display:block;color:#d8d4ee;font-size:13px;margin-bottom:5px}.field input,.field select,.field textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:rgba(255,255,255,.05);color:#fff;font:14px "DM Sans";outline:0}.field textarea{min-height:92px;resize:vertical}.field select option{background:#221f5b}.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.submit,.row button{margin-top:16px;padding:10px 12px;border:0;border-radius:9px;background:linear-gradient(135deg,#a293ff,#6651dd);color:#fff;font:800 13px "DM Sans";cursor:pointer}.hint{font-size:12px;color:var(--muted);margin:12px 0 0}.list{display:grid;gap:9px}.row{padding:13px;border-radius:11px;background:rgba(255,255,255,.035);border:1px solid var(--line)}.row b{font-size:14px;display:block}.row span{font-size:12px;color:var(--muted);display:block;margin-top:3px}.row a{display:inline-block;margin-top:9px;color:var(--aqua);font-size:12px;text-decoration:none}.row button{margin-top:9px;padding:7px 9px;background:rgba(85,217,208,.14);border:1px solid rgba(85,217,208,.24);color:var(--aqua);font-size:12px}.empty{padding:24px;text-align:center;color:var(--muted);font-size:13px}.attendance-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:17px 0 12px}.attendance-summary div{padding:10px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.035);font-size:11px;color:var(--muted)}.attendance-summary b{display:block;color:#fff;font-size:18px}.attendance-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.attendance-controls{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.attendance-controls select,.attendance-controls input{padding:7px 8px;max-width:120px;border:1px solid var(--line);border-radius:8px;background:#221f5b;color:#fff;font:12px "DM Sans"}.attendance-controls input{width:78px}.attendance-controls button{margin:0}.attendance-actions{display:flex;gap:8px;flex-wrap:wrap}.attendance-actions .submit{margin-top:16px}.attendance-finalize{background:linear-gradient(135deg,#e5967f,#b55c77)!important}.toast{position:fixed;right:20px;bottom:20px;max-width:min(430px,calc(100% - 40px));padding:12px 14px;border-radius:11px;background:#2a2768;border:1px solid var(--line);font-size:13px;opacity:0;transform:translateY(70px);transition:.25s}.toast.show{opacity:1;transform:none}@media(max-width:720px){.wrap{width:min(100% - 24px,1200px)}.grid{grid-template-columns:1fr}.top{align-items:start}.two{grid-template-columns:1fr}.attendance-summary{grid-template-columns:repeat(3,minmax(0,1fr))}.attendance-row{align-items:flex-start;flex-direction:column}.attendance-controls{width:100%}}</style>
+</head>
+<body>
+  <header class="wrap top"><a class="brand" href="/"><div class="mark">N</div><div><b>NIOS Best Academy</b><span>Teacher portal</span></div></a><button type="button" onclick="signOut()">Sign out</button></header>
+  <main class="wrap"><section class="hero"><div class="eyebrow">TEACHING OPERATIONS</div><h1>Schedule, teach, review.</h1><p>Each action is sent to the target batch only. Students outside that board, class, stream and subject combination cannot receive the class, homework or material.</p></section><nav class="tabs"><button class="active" data-screen="schedule">Live class scheduler</button><button data-screen="publish">Homework & materials</button><button data-screen="evaluate">Submission evaluator</button><button data-screen="attendance">Attendance</button></nav>
+    <section class="screen active" id="schedule"><div class="grid"><form class="card" onsubmit="scheduleClass(event)"><h2>Schedule a live class</h2><div class="field"><label for="classBatch">Target batch</label><select id="classBatch" required></select></div><div class="two"><div class="field"><label for="classSubject">Subject</label><input id="classSubject" placeholder="Physics" required></div><div class="field"><label for="classCode">Subject code</label><input id="classCode" placeholder="312" required></div></div><div class="field"><label for="classTitle">Class title</label><input id="classTitle" placeholder="Motion and force revision" required></div><div class="two"><div class="field"><label for="classStart">Date and time</label><input id="classStart" type="datetime-local" required></div><div class="field"><label for="classDuration">Duration (minutes)</label><input id="classDuration" type="number" min="15" max="240" value="60" required></div></div><div class="field"><label for="classUrl">Meeting link</label><input id="classUrl" type="url" placeholder="Optional — leave blank to create Zoom meeting"></div><button class="submit">Schedule & notify batch</button><p class="hint">A pasted HTTPS link is used as-is. With server-only Zoom OAuth configured, leaving it blank creates a secure Zoom meeting automatically.</p></form><section class="card"><h2>Scheduled classes</h2><div class="list" id="classList"></div></section></div></section>
+    <section class="screen" id="publish"><div class="grid"><form class="card" onsubmit="publishHomework(event)"><h2>Publish daily homework</h2><div class="field"><label for="homeworkBatch">Target batch</label><select id="homeworkBatch" required></select></div><div class="two"><div class="field"><label for="homeworkSubject">Subject</label><input id="homeworkSubject" placeholder="Physics" required></div><div class="field"><label for="homeworkCode">Subject code</label><input id="homeworkCode" placeholder="312" required></div></div><div class="field"><label for="homeworkTitle">Assignment title</label><input id="homeworkTitle" required></div><div class="field"><label for="homeworkInstructions">Instructions</label><textarea id="homeworkInstructions" required></textarea></div><div class="field"><label for="homeworkDue">Due date</label><input id="homeworkDue" type="datetime-local" required></div><button class="submit">Publish homework</button></form><form class="card" onsubmit="uploadMaterial(event)"><h2>Upload class material</h2><div class="field"><label for="materialBatch">Target batch</label><select id="materialBatch" required></select></div><div class="two"><div class="field"><label for="materialSubject">Subject</label><input id="materialSubject" placeholder="Physics" required></div><div class="field"><label for="materialCode">Subject code</label><input id="materialCode" placeholder="312" required></div></div><div class="field"><label for="materialTitle">Material title</label><input id="materialTitle" required></div><div class="field"><label for="materialType">Material type</label><select id="materialType"><option>Class note</option><option>TMA solution</option><option>Practical guide</option><option>Recorded session</option></select></div><div class="field"><label for="materialFile">PDF or image (max 8 MB)</label><input id="materialFile" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" required></div><button class="submit">Upload to target batch</button></form></div></section>
+    <section class="screen" id="evaluate"><div class="card"><h2>Homework submissions</h2><div class="list" id="submissionList"></div></div></section>
+    <section class="screen" id="attendance"><div class="card"><h2>Live class attendance</h2><p class="hint">Mark attendance after a class. Finalising records every unmarked enrolled student as absent; when email delivery is configured, absence notices are sent at that point only.</p><div class="field"><label for="attendanceClass">Completed class</label><select id="attendanceClass"></select></div><div class="attendance-summary" id="attendanceSummary"></div><div class="list" id="attendanceList"></div><div class="attendance-actions"><button type="button" class="submit" id="refreshAttendance">Refresh roster</button><button type="button" class="submit attendance-finalize" id="finalizeAttendance">Finalise & notify absentees</button></div></div></section>
+  </main><div class="toast" id="toast"></div>
+  <script>
+    const session=JSON.parse(sessionStorage.getItem('niosSession')||'null');if(!session||!['teacher','admin'].includes(session.role))location.replace('/login');let batches=[];const toast=document.getElementById('toast');function say(text){toast.textContent=text;toast.classList.add('show');clearTimeout(window.timer);window.timer=setTimeout(()=>toast.classList.remove('show'),3600)}async function api(path,options={}){const response=await fetch(path,options),data=await response.json().catch(()=>({error:'Invalid server response'}));if(!response.ok)throw new Error(data.error||'Request failed');return data}function options(){['classBatch','homeworkBatch','materialBatch'].forEach(id=>document.getElementById(id).innerHTML=batches.map(batch=>`<option value="${batch.id}">${batch.name} · ${batch.stream}</option>`).join(''))}function fields(prefix){const batchId=document.getElementById(prefix+'Batch').value,batch=batches.find(item=>item.id===batchId);return {batchId,subject:document.getElementById(prefix+'Subject').value.trim(),subjectCode:document.getElementById(prefix+'Code').value.trim(),board:batch?.board,classLevel:batch?.classLevel,stream:batch?.stream}}function fileData(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(file)})}async function scheduleClass(event){event.preventDefault();try{const result=await api('/api/teacher/live-classes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...fields('class'),title:classTitle.value.trim(),startsAt:new Date(classStart.value).toISOString(),durationMinutes:Number(classDuration.value),liveUrl:classUrl.value.trim()})});event.target.reset();options();say(result.hostUrl?'Zoom class created. Use the Host Zoom link in the schedule.':'Class scheduled and the target batch was notified.');load()}catch(error){say(error.message)}}async function publishHomework(event){event.preventDefault();try{await api('/api/teacher/homework',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...fields('homework'),title:homeworkTitle.value.trim(),instructions:homeworkInstructions.value.trim(),dueAt:new Date(homeworkDue.value).toISOString()})});event.target.reset();options();say('Homework is published only to the selected batch.')}catch(error){say(error.message)}}async function uploadMaterial(event){event.preventDefault();const file=materialFile.files[0];if(!file)return;if(file.size>8*1024*1024)return say('Use a file smaller than 8 MB.');try{await api('/api/teacher/materials',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({...fields('material'),title:materialTitle.value.trim(),materialType:materialType.value,fileName:file.name,mimeType:file.type,base64:await fileData(file)})});event.target.reset();options();say('Material uploaded to its selected batch and subject.')}catch(error){say(error.message)}}async function grade(id){const grade=prompt('Grade or marks');if(!grade)return;const feedback=prompt('Feedback for the student');if(!feedback)return;try{await api('/api/teacher/submissions/'+encodeURIComponent(id),{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify({grade,feedback})});say('Feedback published to the student.');loadSubmissions()}catch(error){say(error.message)}}async function loadSubmissions(){try{const submissions=await api('/api/teacher/submissions');submissionList.innerHTML=submissions.length?submissions.map(item=>`<div class="row"><b>${item.student} · ${item.homework?.title||'Homework'}</b><span>${item.status} · ${item.fileName||'No file'}${item.grade?' · Grade: '+item.grade:''}</span>${item.status!=='Graded'?`<button onclick="grade('${item.id}')">Grade & feedback</button>`:'<span>Feedback sent</span>'}</div>`).join(''):'<div class="empty">No student submissions yet.</div>'}catch(error){say(error.message)}}async function load(){try{batches=await api('/api/teacher/batches');options();const live=await api('/api/teacher/live-classes');classList.innerHTML=live.length?live.map(item=>`<div class="row"><b>${item.title}</b><span>${item.subject} · ${new Date(item.startsAt).toLocaleString()} · ${item.meetingProvider||'external'}</span>${item.hostUrl?`<a target="_blank" rel="noopener" href="${item.hostUrl}">Host Zoom meeting ↗</a>`:''}</div>`).join(''):'<div class="empty">Schedule your first batch class.</div>';loadSubmissions()}catch(error){say(error.message)}}document.querySelectorAll('[data-screen]').forEach(button=>button.addEventListener('click',()=>{document.querySelectorAll('[data-screen]').forEach(item=>item.classList.toggle('active',item===button));document.querySelectorAll('.screen').forEach(item=>item.classList.toggle('active',item.id===button.dataset.screen))}));load();
+  </script>
+  <script>
+    (() => {
+      const tab = document.querySelector('[data-screen="attendance"]');
+      const classSelect = document.getElementById('attendanceClass');
+      const summary = document.getElementById('attendanceSummary');
+      const list = document.getElementById('attendanceList');
+      const refresh = document.getElementById('refreshAttendance');
+      const finalize = document.getElementById('finalizeAttendance');
+      const states = ['Present', 'Late', 'Excused', 'Absent'];
+      let roster = null;
+
+      function emptyAttendance(message) {
+        summary.replaceChildren();
+        list.replaceChildren();
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = message;
+        list.append(empty);
+        finalize.disabled = true;
+      }
+      function metric(label, value) {
+        const item = document.createElement('div');
+        const number = document.createElement('b');
+        const text = document.createElement('span');
+        number.textContent = value == null ? '—' : String(value);
+        text.textContent = label;
+        item.append(number, text);
+        return item;
+      }
+      function renderAttendance(data) {
+        roster = data;
+        const stats = data.summary || {};
+        summary.replaceChildren(
+          metric('Enrolled', stats.eligible || 0),
+          metric('Attended', stats.attended || 0),
+          metric('Absent', stats.absent || 0),
+          metric('Pending', stats.pending || 0),
+          metric('Rate', stats.attendanceRate == null ? '—' : String(stats.attendanceRate) + '%')
+        );
+        list.replaceChildren();
+        const duration = Number(data.liveClass && data.liveClass.durationMinutes) || 60;
+        for (const student of data.students || []) {
+          const row = document.createElement('div');
+          row.className = 'row attendance-row';
+          const details = document.createElement('div');
+          const name = document.createElement('b');
+          const meta = document.createElement('span');
+          name.textContent = student.name;
+          meta.textContent = student.status === 'Unmarked' ? 'Not marked yet' : student.status + (student.minutesAttended == null ? '' : ' · ' + student.minutesAttended + ' minutes');
+          details.append(name, meta);
+          if (student.absenceNotifiedAt) {
+            const notice = document.createElement('span');
+            notice.textContent = 'Absence notice sent';
+            details.append(notice);
+          }
+
+          const controls = document.createElement('div');
+          controls.className = 'attendance-controls';
+          const status = document.createElement('select');
+          const initial = document.createElement('option');
+          initial.value = 'Unmarked';
+          initial.textContent = 'Mark attendance';
+          status.append(initial);
+          for (const state of states) {
+            const option = document.createElement('option');
+            option.value = state;
+            option.textContent = state;
+            status.append(option);
+          }
+          status.value = student.status || 'Unmarked';
+          const minutes = document.createElement('input');
+          minutes.type = 'number';
+          minutes.min = '0';
+          minutes.max = String(duration);
+          minutes.placeholder = 'Minutes';
+          minutes.value = student.minutesAttended == null ? '' : String(student.minutesAttended);
+          minutes.setAttribute('aria-label', 'Minutes attended for ' + student.name);
+          const note = document.createElement('button');
+          note.type = 'button';
+          note.textContent = 'Note';
+          note.addEventListener('click', () => {
+            if (status.value === 'Unmarked') return say('Choose an attendance state before saving a note.');
+            const next = window.prompt('Private attendance note for ' + student.name, student.note || '');
+            if (next === null) return;
+            saveAttendance(student, status.value, minutes.value, next);
+          });
+          status.addEventListener('change', () => {
+            if (status.value === 'Unmarked') {
+              status.value = student.status || 'Unmarked';
+              return;
+            }
+            saveAttendance(student, status.value, minutes.value, student.note || '');
+          });
+          minutes.addEventListener('change', () => {
+            if (status.value !== 'Unmarked') saveAttendance(student, status.value, minutes.value, student.note || '');
+          });
+          controls.append(status, minutes, note);
+          row.append(details, controls);
+          list.append(row);
+        }
+        if (!(data.students || []).length) emptyAttendance('No active students are enrolled in this class.');
+        finalize.disabled = !data.liveClass || Boolean(data.liveClass.restricted);
+        finalize.textContent = stats.finalizedAt ? 'Recheck absence notices' : 'Finalise & notify absentees';
+      }
+      async function saveAttendance(student, status, minutesAttended, note) {
+        try {
+          const value = String(minutesAttended || '').trim();
+          await api('/api/teacher/live-classes/' + encodeURIComponent(classSelect.value) + '/attendance/' + encodeURIComponent(student.id), {
+            method: 'PUT',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ status, minutesAttended: value === '' ? null : Number(value), note })
+          });
+          say(student.name + ' marked ' + status + '.');
+          await loadAttendanceRoster();
+        } catch (error) { say(error.message); }
+      }
+      async function loadAttendanceRoster() {
+        if (!classSelect.value) return emptyAttendance('Choose a completed class to review attendance.');
+        try {
+          const data = await api('/api/teacher/live-classes/' + encodeURIComponent(classSelect.value) + '/attendance');
+          renderAttendance(data);
+        } catch (error) { emptyAttendance(error.message); }
+      }
+      async function loadAttendanceClasses() {
+        try {
+          const classes = await api('/api/teacher/live-classes');
+          const completed = classes.filter(item => Date.now() >= new Date(item.startsAt).getTime() + Number(item.durationMinutes || 60) * 60000);
+          const prior = classSelect.value;
+          classSelect.replaceChildren();
+          for (const item of completed) {
+            const option = document.createElement('option');
+            option.value = item.id;
+            option.textContent = item.subject + ' · ' + item.title + ' · ' + new Date(item.startsAt).toLocaleDateString();
+            classSelect.append(option);
+          }
+          if (!completed.length) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'No completed classes yet';
+            classSelect.append(option);
+            emptyAttendance('Classes appear here after their scheduled end time.');
+            return;
+          }
+          classSelect.value = completed.some(item => item.id === prior) ? prior : completed[0].id;
+          await loadAttendanceRoster();
+        } catch (error) { emptyAttendance(error.message); }
+      }
+      classSelect.addEventListener('change', loadAttendanceRoster);
+      refresh.addEventListener('click', loadAttendanceClasses);
+      finalize.addEventListener('click', async () => {
+        if (!roster || !classSelect.value) return;
+        if (!window.confirm('Finalise this class? Every unmarked enrolled student will be recorded absent. Absence notifications will be sent through the configured provider.')) return;
+        finalize.disabled = true;
+        try {
+          const data = await api('/api/teacher/live-classes/' + encodeURIComponent(classSelect.value) + '/attendance/finalize', { method: 'POST' });
+          renderAttendance(data);
+          const notification = data.notification || {};
+          say('Attendance finalised. ' + (notification.delivered || 0) + ' absence notice(s) sent' + (notification.failed ? '; ' + notification.failed + ' need attention.' : '.'));
+        } catch (error) { say(error.message); }
+        finally { if (roster) finalize.disabled = false; }
+      });
+      tab.addEventListener('click', loadAttendanceClasses);
+    })();
+  </script>
+  <script>async function signOut(){try{await fetch('/api/auth/logout',{method:'POST'})}finally{sessionStorage.removeItem('niosSession');location.href='/'}}</script>
+</body>
+</html>
