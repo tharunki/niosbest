@@ -8,7 +8,9 @@
     "dev": "node --watch server.mjs",
     "check": "node --check server.mjs && node --check state-store.mjs",
     "test:state": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs",
-    "test:release": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs && node qa/release-security.test.mjs && node qa/canonical-seo-gate.test.mjs"
+    "test:diagnostics": "node qa/integration-diagnostics.test.mjs",
+    "test:mira": "node qa/counselor.test.mjs && node qa/mira-client.test.mjs && node --check ../student-assistant.js && node --check ../student-app.js",
+    "test:release": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs && node qa/release-security.test.mjs && node qa/integration-diagnostics.test.mjs && node qa/canonical-seo-gate.test.mjs && node qa/counselor.test.mjs && node qa/mira-client.test.mjs && node --check ../student-assistant.js && node --check ../student-app.js"
   },
   "engines": {
     "node": ">=20"

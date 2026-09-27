@@ -59,4 +59,4 @@ The generated interaction inventory is not proof that every button works. Add ex
 
 Current implementation uses an authenticated file proxy, not browser-visible signed storage links. Encryption at rest cannot be proven by a browser test: separately inspect vault cryptography, key management and cloud storage settings. Client-side encryption with a browser-delivered key is not a substitute for keeping secrets off the client.
 
-Known expected release failure: the server currently sets SameSite=Lax. The strict security test intentionally fails until policy/implementation is changed and payment redirect compatibility is verified. Local HTTP is for development only and cannot pass the production TLS test.
+The server uses `SameSite=Strict` and `Secure` session cookies in production. Local HTTP is for development only and cannot pass the production TLS test.

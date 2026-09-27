@@ -82,6 +82,14 @@ try {
   assert.equal(login.response.status, 200);
   assert.ok(login.cookie.startsWith('nios_session='));
   assert.equal(login.data.user.role, 'student');
+  const counselor = await api('/api/counselor', { method: 'POST', cookie: login.cookie, body: { message: 'What is my admission status?' } });
+  assert.equal(counselor.response.status, 200);
+  assert.equal(counselor.data.assistantType, 'academic-assistant');
+  assert.equal(JSON.stringify(counselor.data).includes('RF-26-0920-184'), false, 'Mira must not receive or return the student reference record');
+  const privateMira = await api('/api/counselor', { method: 'POST', cookie: login.cookie, body: { message: 'My enrollment is NIOS12345' } });
+  assert.equal(privateMira.response.status, 200);
+  assert.equal(privateMira.data.topic, 'privacy');
+  assert.equal(JSON.stringify(privateMira.data).includes('NIOS12345'), false, 'Mira must not echo a private identifier submitted directly to its API');
   const batches = await api('/api/batches', { cookie: login.cookie });
   assert.equal(batches.response.status, 200);
   assert.ok(batches.data.length > 0, 'a current admission batch is required for this isolated test');
@@ -110,7 +118,7 @@ try {
   assert.deepEqual(Object.keys(readiness.data.readiness.zoom).sort(), ['missing', 'ready']);
   assert.equal(typeof readiness.data.readiness.email.ready, 'boolean');
 
-  console.log('release-security.test.mjs: 25 focused security assertions passed');
+  console.log('release-security.test.mjs: security, private-context, and counselor-route assertions passed');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolvePromise => child.once('exit', resolvePromise));

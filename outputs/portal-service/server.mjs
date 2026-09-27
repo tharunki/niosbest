@@ -561,6 +561,154 @@ function integrationReadiness(state) {
     nios: { mode: niosMode, ready: niosMode === 'manual' || configured(niosRequirements).length === 0, missing: configured(niosRequirements) }
   };
 }
+function configuredEnvironmentNames(names) {
+  return names.filter(name => !String(process.env[name] || '').trim());
+}
+function configuredEmailDomain(value) {
+  const raw = String(value || '').trim();
+  const address = (raw.match(/<\s*([^<>\s]+@[^<>\s]+)\s*>/) || [])[1] || raw;
+  const match = address.match(/^[^@\s]+@([^@\s]+)$/);
+  return match ? match[1].toLowerCase() : null;
+}
+function diagnosticFailure(response, fallback = 'provider-unavailable') {
+  const status = Number(response?.status);
+  const code = Number.isInteger(status) && status >= 400 && status < 500 ? 'authorization-or-request-rejected' : fallback;
+  return { checked: true, reachable: false, httpStatus: Number.isInteger(status) ? status : null, code };
+}
+function compactDeliveryStatus(state) {
+  const latest = [...(state.enrollments || [])]
+    .filter(item => item.intakeNotice?.attemptedAt)
+    .sort((a, b) => String(b.intakeNotice.attemptedAt).localeCompare(String(a.intakeNotice.attemptedAt)))[0]?.intakeNotice;
+  if (!latest) return null;
+  const statusMatch = String(latest.error || '').match(/\b([1-5]\d\d)\b/);
+  return {
+    status: ['sent', 'queued', 'failed'].includes(latest.status) ? latest.status : 'unknown',
+    provider: ['resend', 'webhook', 'academy-review-queue'].includes(latest.provider) ? latest.provider : 'unknown',
+    attemptedAt: latest.attemptedAt || null,
+    httpStatus: statusMatch ? Number(statusMatch[1]) : null
+  };
+}
+function supabaseDiagnosticConfiguration() {
+  const source = String(process.env.SUPABASE_URL || '').trim().replace(/\/$/, '');
+  const schema = String(process.env.SUPABASE_STATE_SCHEMA || 'public').trim();
+  const table = String(process.env.SUPABASE_STATE_TABLE || 'portal_state').trim();
+  const bucket = String(process.env.SUPABASE_BUCKET || '').trim();
+  const key = String(process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+  const missing = configuredEnvironmentNames(['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'SUPABASE_BUCKET']);
+  if (missing.length) return { valid: false, missing, source: '', schema: '', table: '', bucket: '', key: '' };
+  try {
+    const url = new URL(source);
+    if (!['https:', 'http:'].includes(url.protocol) || (isProduction && url.protocol !== 'https:')) throw new Error('invalid protocol');
+    if (!/^[a-z_][a-z0-9_]*$/i.test(schema) || !/^[a-z_][a-z0-9_]*$/i.test(table)) throw new Error('invalid identifier');
+    return { valid: true, missing: [], source: url.origin, schema, table, bucket, key };
+  } catch {
+    return { valid: false, missing: ['valid Supabase configuration'], source: '', schema: '', table: '', bucket: '', key: '' };
+  }
+}
+function supabaseDiagnosticHeaders(key, schema) {
+  const legacyJwt = String(key).startsWith('eyJ');
+  return { apikey: key, ...(legacyJwt ? { authorization: `Bearer ${key}` } : {}), accept: 'application/json', 'accept-profile': schema };
+}
+async function integrationDiagnostics(state, { probe = false } = {}) {
+  const resendMissing = configuredEnvironmentNames(['RESEND_API_KEY', 'ADMISSION_EMAIL_FROM', 'ADMIN_ADMISSION_EMAIL']);
+  const senderDomain = configuredEmailDomain(process.env.ADMISSION_EMAIL_FROM);
+  const zoomMissing = configuredEnvironmentNames(['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET']);
+  const zoomHostConfigured = isSafeString(String(process.env.ZOOM_HOST_USER_ID || '').trim(), 254);
+  const supabase = supabaseDiagnosticConfiguration();
+  const checks = {
+    persistence: {
+      stateDriver: stateStore.publicStatus().driver,
+      durable: stateStore.durable,
+      writeReady: productionWritesReady,
+      nextAction: productionWritesReady ? 'Durable application state and private file storage are ready.' : 'Apply the portal-state migration, set PORTAL_STATE_DRIVER=supabase, and redeploy before accepting student records or payments.'
+    },
+    resend: {
+      checked: false,
+      configured: resendMissing.length === 0 && Boolean(senderDomain),
+      missing: senderDomain ? resendMissing : [...new Set([...resendMissing, 'valid ADMISSION_EMAIL_FROM'])],
+      senderDomain: senderDomain || null,
+      latestIntakeDelivery: compactDeliveryStatus(state),
+      nextAction: resendMissing.length === 0 && senderDomain ? 'Use Verify connections to confirm the sender domain without sending an email.' : 'Set a Resend API key, verified sender address, and academy review inbox.'
+    },
+    zoom: {
+      checked: false,
+      configured: zoomMissing.length === 0,
+      meetingHostConfigured: zoomHostConfigured,
+      missing: zoomMissing,
+      nextAction: zoomMissing.length ? 'Set the server-only Zoom Account ID, Client ID, and Client Secret.' : !zoomHostConfigured ? 'Set ZOOM_HOST_USER_ID to the licensed Zoom host email address or user ID, or paste a manual HTTPS meeting link.' : 'Use Verify connections to check Zoom authorization without creating a meeting.'
+    },
+    supabase: {
+      checked: false,
+      configured: supabase.valid,
+      missing: supabase.missing,
+      storageDriver: String(process.env.STORAGE_DRIVER || 'local').trim().toLowerCase(),
+      nextAction: supabase.valid ? 'Use Verify connections to check the private bucket and portal-state migration without reading student records.' : 'Set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and SUPABASE_BUCKET on the server.'
+    }
+  };
+  if (!probe) return { checkedAt: null, remoteChecks: false, checks };
+
+  checks.resend.checked = true;
+  if (!checks.resend.configured) {
+    checks.resend.code = 'not-configured';
+  } else {
+    try {
+      const response = await fetch('https://api.resend.com/domains', { headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}` }, signal: AbortSignal.timeout(12_000) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) Object.assign(checks.resend, diagnosticFailure(response));
+      else {
+        const domains = Array.isArray(payload.data) ? payload.data : [];
+        const domain = domains.find(item => String(item.name || '').toLowerCase() === senderDomain);
+        checks.resend.reachable = true;
+        checks.resend.httpStatus = response.status;
+        checks.resend.senderDomainVerified = String(domain?.status || '').toLowerCase() === 'verified';
+        checks.resend.nextAction = checks.resend.senderDomainVerified ? 'Sender domain is verified. A future real application will send normally; no email was sent by this check.' : 'Verify the displayed sender domain in Resend before relying on intake emails.';
+      }
+    } catch { Object.assign(checks.resend, { reachable: false, httpStatus: null, code: 'provider-unavailable' }); }
+  }
+
+  checks.zoom.checked = true;
+  if (!checks.zoom.configured) {
+    checks.zoom.code = 'not-configured';
+  } else {
+    try {
+      await zoomAccessToken();
+      checks.zoom.authorized = true;
+      checks.zoom.nextAction = zoomHostConfigured ? 'Zoom authorization is valid. Scheduling will still create a meeting only when a teacher chooses that option.' : 'Zoom authorization is valid. Set ZOOM_HOST_USER_ID before automatic meeting creation, or use a manual HTTPS meeting link.';
+    } catch (error) {
+      const status = Number(error?.status);
+      checks.zoom.authorized = false;
+      checks.zoom.reachable = false;
+      checks.zoom.httpStatus = Number.isInteger(status) ? status : null;
+      checks.zoom.code = 'authorization-failed';
+      checks.zoom.nextAction = 'Recheck the Zoom Server-to-Server OAuth credentials and app scopes. No meeting was created.';
+    }
+  }
+
+  checks.supabase.checked = true;
+  if (!supabase.valid) {
+    checks.supabase.code = 'not-configured';
+  } else {
+    const headers = supabaseDiagnosticHeaders(supabase.key, supabase.schema);
+    try {
+      const table = await fetch(`${supabase.source}/rest/v1/${encodeURIComponent(supabase.table)}?id=eq.primary&select=id,revision&limit=1`, { headers, signal: AbortSignal.timeout(12_000) });
+      const tableRows = table.ok ? await table.json().catch(() => []) : [];
+      checks.supabase.tableHttpStatus = table.status;
+      checks.supabase.tableExists = table.ok;
+      checks.supabase.stateRowInitialized = table.ok && Array.isArray(tableRows) && tableRows.length > 0;
+      if (!table.ok) checks.supabase.tableCode = table.status === 404 ? 'migration-required' : diagnosticFailure(table).code;
+    } catch { Object.assign(checks.supabase, { tableHttpStatus: null, tableExists: false, tableCode: 'provider-unavailable' }); }
+    try {
+      const bucket = await fetch(`${supabase.source}/storage/v1/bucket/${encodeURIComponent(supabase.bucket)}`, { headers: { apikey: supabase.key, ...(String(supabase.key).startsWith('eyJ') ? { authorization: `Bearer ${supabase.key}` } : {}) }, signal: AbortSignal.timeout(12_000) });
+      const details = bucket.ok ? await bucket.json().catch(() => ({})) : {};
+      checks.supabase.bucketHttpStatus = bucket.status;
+      checks.supabase.bucketExists = bucket.ok;
+      checks.supabase.bucketPrivate = bucket.ok ? details.public === false : null;
+      if (!bucket.ok) checks.supabase.bucketCode = diagnosticFailure(bucket).code;
+    } catch { Object.assign(checks.supabase, { bucketHttpStatus: null, bucketExists: false, bucketPrivate: null, bucketCode: 'provider-unavailable' }); }
+    checks.supabase.nextAction = checks.supabase.tableExists && checks.supabase.bucketExists && checks.supabase.bucketPrivate ? (checks.supabase.stateRowInitialized ? 'Supabase state and private storage are reachable. Switch PORTAL_STATE_DRIVER to supabase only when ready to initialize durable state.' : 'Portal-state table and private storage are ready. Set PORTAL_STATE_DRIVER=supabase and redeploy; the server will initialize its first state row.') : 'Apply the portal-state SQL migration and ensure the configured document bucket exists and remains private.';
+  }
+  return { checkedAt: now(), remoteChecks: true, checks };
+}
 function requireAdmin(request) {
   const session = readSession(request);
   if (session?.role === 'admin') return session;
@@ -899,8 +1047,17 @@ const server = createServer(async (request, response) => {
       const student = state.students.find(item => item.id === session.studentId);
       if (!student) return send(response, 403, {error:'Student profile unavailable.'});
       const enrollment = applicationEnrollment(state, session.studentId);
-      student.subjects = studentSubjectsForEnrollment(student, enrollment, state);
-      return send(response, 200, counselorReply(input.message, {enrollment,subjects:student.subjects||[]}, String(input.topic||'')));
+      const batch = enrollment && state.batches.find(item => item.id === enrollment.batchId);
+      // Mira is intentionally passed an allowlisted teaching context only. Never pass
+      // the student record, credential vault, private documents, payment fields, or IDs.
+      const counselorContext = {
+        enrollment: enrollment ? {
+          status: String(enrollment.status || ''),
+          batchName: String(batch?.name || enrollment.batchName || '')
+        } : {},
+        subjects: studentSubjectsForEnrollment(student, enrollment, state)
+      };
+      return send(response, 200, counselorReply(input.message, counselorContext, String(input.topic||'')));
     }
     if (await resourceStore(request,response,url,{readState,updateState,readSession,requireAdmin,body,send,storage,filePayload,uid,isProduction})) return;
     if (method === 'GET' && path === '/api/health') return send(response, 200, {
@@ -1259,6 +1416,7 @@ const server = createServer(async (request, response) => {
     }
     const adminAdmissionDocumentMatch = path.match(/^\/api\/admin\/admission-documents\/([^/]+)\/download$/);
     if (method === 'GET' && adminAdmissionDocumentMatch) { requireAdmin(request); const state = await readState(), document = state.admissionDocuments.find(item => item.id === adminAdmissionDocumentMatch[1]); if (!document) return send(response, 404, { error: 'Admission document not found.' }); const stored = await storage.get(document.storageKey); response.writeHead(200, { 'content-type': document.mimeType, 'content-disposition': `attachment; filename="${document.fileName}"` }); return response.end(stored.bytes); }
+    if (method === 'GET' && path === '/api/admin/integrations') { requireAdmin(request); const state = await readState(); return send(response, 200, await integrationDiagnostics(state, { probe: url.searchParams.get('probe') === '1' })); }
     if (method === 'GET' && path === '/api/admin/health') { requireAdmin(request); const state = await readState(), logs = state.syncLogs || [], success = logs.filter(item => item.status === 'SUCCESS').length, failed = logs.filter(item => item.status === 'FAILED' || item.status === 'PORTAL_OFFLINE').length; return send(response, 200, { queued: state.jobs.filter(item => item.status === 'queued').length, processing: state.jobs.filter(item => item.status === 'processing').length, failed: state.jobs.filter(item => item.status === 'failed' || item.status === 'portal_offline').slice(-10), completed: state.jobs.filter(item => item.status === 'completed').slice(-20), successRate: success + failed ? Math.round((success / (success + failed)) * 1000) / 10 : null, audit: state.audit.slice(-25), readyForWrites: productionWritesReady, readiness: integrationReadiness(state) }); }
     if (method === 'GET' && path === '/api/admin/sync-logs') { requireAdmin(request); const state = await readState(); return send(response, 200, (state.syncLogs || []).slice(-100).reverse()); }
     if (method === 'GET' && path === '/api/admin/batches') { requireAdmin(request); const state = await readState(); return send(response, 200, state.batches); }

@@ -53,6 +53,33 @@
     } catch { return ''; }
   }
 
+  function safeOfficialSource(value) {
+    try {
+      const url = new URL(String(value || ''));
+      const host = url.hostname.toLowerCase();
+      return url.protocol === 'https:' && new Set(['nios.ac.in', 'www.nios.ac.in', 'sdmis.nios.ac.in']).has(host) ? url.href : '';
+    } catch { return ''; }
+  }
+
+  // Do not transmit a likely actual secret, card/ID value, or private identifier to Mira.
+  // General process questions still reach the privacy-safe server response.
+  function containsSensitiveAssistantValue(value) {
+    const text = String(value || '').trim();
+    return /\b(?:password|passcode|otp|one[ -]?time (?:passcode|password)|upi\s*pin|cvv|card(?:\s*(?:number|details|pin))?|bank(?:\s*(?:account|details|number|ifsc))?)\s*(?:is|:|=|-)?\s*(?:\d{4,}|[A-Za-z0-9!@#$%^&*_-]{6,})\b/i.test(text)
+      || /\b(?:\d[ -]?){12}\b/.test(text)
+      || /\b(?:\d[ -]?){13,19}\b/.test(text)
+      || /\b(?:enrol(?:l?ment)?|reference|registration)\s*(?:number|no\.?|id)?\s*(?:is|:|#|-)\s*[A-Za-z0-9-]{5,}\b/i.test(text)
+      || /\b(?:date of birth|dob)\s*(?:is|:|#|-)\s*\d{1,4}[/-]\d{1,2}[/-]\d{1,4}\b/i.test(text)
+      || /\b[A-Z]{4}0[A-Z0-9]{6}\b/.test(text);
+  }
+
+  const localPrivacyReply = {
+    title: 'Private information was not sent',
+    text: 'For your safety, Mira did not send that message. Never paste a password, OTP, PIN, card or bank detail, Aadhaar/PAN/passport number, date of birth, enrolment/reference number, or document image into chat.',
+    steps: ['Use the signed-in admission workflow for document or profile updates.', 'Use official account recovery or payment-provider support for a secret or payment issue.'],
+    links: [['Open secure admission status', '/admission-intake'], ['Contact academy support', '/contact.html#form']]
+  };
+
   async function api(path, options = {}) {
     const controller = new AbortController();
     const timeout = window.setTimeout(() => controller.abort(), options.timeout || 12000);
@@ -278,6 +305,21 @@
           message.append(anchor);
         });
       }
+      if (Array.isArray(copy.sources) && copy.sources.length) {
+        const sources = element('div', 'assistant-sources');
+        sources.append(element('span', '', 'Official source to check'));
+        copy.sources.slice(0, 2).forEach(source => {
+          const label = Array.isArray(source) ? source[0] : '';
+          const href = safeOfficialSource(Array.isArray(source) ? source[1] : '');
+          if (!href) return;
+          const anchor = element('a', '', `${label} →`);
+          anchor.href = href;
+          anchor.target = '_blank';
+          anchor.rel = 'noopener noreferrer';
+          sources.append(anchor);
+        });
+        if (sources.childElementCount > 1) message.append(sources);
+      }
     }
     byId('assistantLog').append(message);
     byId('assistantLog').scrollTop = byId('assistantLog').scrollHeight;
@@ -294,12 +336,19 @@
     });
   }
 
+  function setAssistantBusy(value) {
+    state.assistantBusy = value;
+    byId('assistantInput').disabled = value;
+    byId('assistantForm').querySelector('button[type=submit]').disabled = value;
+    byId('assistantPrompts').querySelectorAll('button').forEach(button => { button.disabled = value; });
+  }
+
   function openAssistant() {
     const sheet = byId('assistantSheet');
     sheet.hidden = false;
     if (!byId('assistantLog').childElementCount) {
-      appendMessage({ title: 'Hi — I’m Mira.', text: 'I can help with your selected subjects, TMA work, study plan, live classes and admission steps. I will not ask for passwords, OTPs, Aadhaar details or payment information.', steps: ['Ask one question at a time for the clearest answer.'], links: [] });
-      renderPrompts(['My admission status', 'Help me plan this week', 'TMA help', 'Live classes']);
+      appendMessage({ title: 'Hi — I’m Mira.', text: 'I can help with your admission, batch, selected subjects, TMA work, PYQs, practicals, study plan, live classes and materials. I do not ask for or retrieve passwords, OTPs, Aadhaar details, payment details, or private identifiers.', steps: ['Ask one question at a time for the clearest answer.', 'Confirm official dates, fees, hall tickets and decisions with NIOS or the academy.'], links: [] });
+      renderPrompts(['My admission status', 'Subjects & batch', 'TMA help', 'PYQs and materials']);
     }
     window.setTimeout(() => byId('assistantInput').focus(), 20);
   }
@@ -310,10 +359,18 @@
     const input = byId('assistantInput');
     const text = String(question || input.value || '').trim();
     if (!text || state.assistantBusy) return;
-    state.assistantBusy = true;
+    if (containsSensitiveAssistantValue(text)) {
+      input.value = '';
+      appendMessage('A private detail was removed and was not sent.', true);
+      appendMessage(localPrivacyReply);
+      renderPrompts(['What documents are required?', 'What is my admission status?', 'How do I select subjects?']);
+      setText('assistantStatus', 'For your privacy, that value was kept out of the assistant request.');
+      return;
+    }
+    setAssistantBusy(true);
     input.value = '';
     appendMessage(text, true);
-    setText('assistantStatus', 'Mira is checking your Student Desk information…');
+    setText('assistantStatus', 'Mira is matching your question to Student Desk guidance…');
     try {
       const result = await api('/api/counselor', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: text, topic: state.assistantTopic }), timeout: 15000 });
       if (!result.response.ok) throw new Error(result.data.error || 'Mira is unavailable right now.');
@@ -324,7 +381,7 @@
     } catch (error) {
       setText('assistantStatus', error.name === 'AbortError' ? 'The reply timed out. Please try again.' : error.message || 'Mira is unavailable right now.');
     } finally {
-      state.assistantBusy = false;
+      setAssistantBusy(false);
     }
   }
 
