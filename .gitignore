@@ -8,6 +8,9 @@ outputs/portal-service/*.log
 *.log
 .DS_Store
 
+# Dependency installs belong to each developer or deployment environment.
+node_modules/
+
 # Local editor and temporary files.
 .vscode/
 .idea/

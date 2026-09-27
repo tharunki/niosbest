@@ -65,6 +65,16 @@ This is the version to use for a low-cost launch. The Worker source is in `cloud
 
 The Workers, D1 and R2 included free allowances are generous for a new study-material site, but R2 is usage-billed after its free allowance and Cloudflare may require a billing profile/card even when monthly usage remains ₹0. Add a Cloudflare budget alert before opening sales. The free Worker upload route is suitable for the current chapter PDFs; upload very large bundle PDFs only after testing because Workers Free has a small CPU limit.
 
+### Catalogue-only preview while R2 is pending
+
+If the R2 activation page is still awaiting a billing profile, do **not** attach public PDF links or Razorpay credentials as a workaround. The project includes a safe temporary launch command instead:
+
+```powershell
+pnpm run cloudflare:catalog-preview
+```
+
+It deploys the shared catalogue, search, and protected admin area to the same `workers.dev` address without an R2 binding. Students can browse the library, while the admin can create sections and draft cards. PDF upload, paid checkout, and downloads deliberately show a clear unavailable message until private R2 storage is enabled. After activating R2, deploy the normal configuration with `pnpm run cloudflare:deploy`; it attaches the private `PAPERS` bucket without changing the public Worker URL.
+
 ## Legacy Node / Render fallback
 
 `server.mjs` and `render.yaml` are retained only to support local development and non-payment previews. Do **not** deploy them for live paid sales, attach Razorpay Live credentials, upload paid PDFs, or point the production domain at them. The Cloudflare Worker is the production path because it includes persistent admin sessions, payment recovery, protected-file change guards, server-side filtering, checkout throttling, and per-paper SEO.
