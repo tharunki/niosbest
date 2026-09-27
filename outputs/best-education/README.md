@@ -2,7 +2,7 @@
 
 Best Education sells protected study PDFs for Classes 10, 11 and 12. It includes a secure admin area, a shared catalogue, Razorpay checkout, private time-limited downloads, and an automatically generated sitemap.
 
-The recommended live deployment is the **Cloudflare free tier**: static pages are served from Cloudflare's edge, the shared catalogue and orders live in D1, and PDFs are stored in a private R2 bucket. The legacy Node/Render version remains available as a paid-hosting alternative.
+The recommended live deployment is the **Cloudflare free tier**: static pages are served from Cloudflare's edge, the shared catalogue and orders live in D1, and PDFs are stored in a private R2 bucket. The legacy Node/Render server is retained only for local development and is **not approved for live paid sales**.
 
 ## Run locally
 
@@ -64,29 +64,11 @@ This is the version to use for a low-cost launch. The Worker source is in `cloud
 
 The Workers, D1 and R2 included free allowances are generous for a new study-material site, but R2 is usage-billed after its free allowance and Cloudflare may require a billing profile/card even when monthly usage remains ₹0. Add a Cloudflare budget alert before opening sales. The free Worker upload route is suitable for the current chapter PDFs; upload very large bundle PDFs only after testing because Workers Free has a small CPU limit.
 
-## Render deployment
+## Legacy Node / Render fallback
 
-`render.yaml` creates a paid Render Web Service with a 1 GB disk mounted at `/var/data`. It is deliberately a Web Service, not a Static Site.
+`server.mjs` and `render.yaml` are retained only to support local development and non-payment previews. Do **not** deploy them for live paid sales, attach Razorpay Live credentials, upload paid PDFs, or point the production domain at them. The Cloudflare Worker is the production path because it includes persistent admin sessions, payment recovery, protected-file change guards, server-side filtering, checkout throttling, and per-paper SEO.
 
-Before deploying, create a **private** Git repository. The `.gitignore` intentionally excludes `papers/`, databases, and secrets so paid PDFs cannot be exposed through the repository. After the first deployment, upload PDFs through `/admin.html`; they are stored on the Render disk.
-
-In Render set these private environment values:
-
-- `SITE_URL` — your final HTTPS address, for example `https://www.ravitestpapers.in`
-- `ADMIN_PASSWORD` — a unique password of at least 12 characters
-- `DOWNLOAD_TOKEN_SECRET` — a separate random secret of at least 32 characters
-- `RAZORPAY_KEY_ID` and `RAZORPAY_KEY_SECRET` — Test keys first, then Live keys
-- `RAZORPAY_WEBHOOK_SECRET` — the secret generated when you create the Razorpay webhook
-
-Configure Razorpay to call:
-
-```text
-https://YOUR-DOMAIN/api/payment/webhook
-```
-
-Subscribe it to `payment.captured` and `payment.failed`. The server records Razorpay orders in SQLite and verifies both the checkout signature and captured payment before it supplies a PDF.
-
-The Render disk is required: databases and uploaded PDFs must live under `/var/data` so they remain after a deploy. Do not scale this disk-backed service to more than one instance.
+If you later need a Render-based paid deployment, backport and test those protections before using it. Keep the repository private and continue to exclude `papers/`, database files, and secrets from Git.
 
 ## Checks
 
