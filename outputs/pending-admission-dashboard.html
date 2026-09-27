@@ -1,2 +1,99 @@
-<!doctype html><html lang="en"><head>
-  <meta name="robots" content="noindex,nofollow,noarchive"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Admission Status — NIOS Best Academy</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet"><style>:root{--bg:#0c0c29;--ink:#f5f3ff;--muted:#aaa8ca;--line:rgba(207,201,255,.17);--violet:#8977ff;--aqua:#55d9d0;--gold:#ffc36b}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 10% 0,rgba(102,80,221,.31),transparent 40%),var(--bg);color:var(--ink);font:15px/1.5 "DM Sans",sans-serif}.wrap{width:min(100% - 34px,1040px);margin:auto}.top{height:76px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.brand{display:flex;gap:9px;align-items:center;color:#fff;text-decoration:none}.mark{height:35px;width:35px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(145deg,#ac9fff,#604bdb);font:800 16px "Plus Jakarta Sans"}.brand b{font:700 15px "Plus Jakarta Sans";display:block}.brand span{display:block;color:var(--muted);font-size:9px}.back{font-size:10px;color:#cac4ff;text-decoration:none}.hero{padding:46px 0 26px}.eyebrow{font-size:10px;letter-spacing:.14em;font-weight:700;color:#ddd9ff}.hero h1{font:600 clamp(30px,4.5vw,47px)/1.14 "Plus Jakarta Sans";letter-spacing:-.065em;margin:7px 0}.hero p{color:#d0cbea;font-size:13px;margin:0;max-width:690px}.notice{margin:20px 0;padding:16px;border:1px solid rgba(85,217,208,.22);border-radius:15px;background:rgba(85,217,208,.08)}.notice b{display:block;color:var(--aqua);font:600 14px "Plus Jakarta Sans"}.notice span{font-size:11px;color:#c8e7e5}.stages{display:grid;gap:10px;padding-bottom:48px}.stage{display:flex;gap:13px;align-items:center;padding:15px 17px;border:1px solid var(--line);border-radius:14px;background:rgba(31,30,82,.76)}.dot{height:31px;width:31px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);color:var(--muted);font-size:12px}.stage b{display:block;font-size:13px}.stage span{display:block;color:var(--muted);font-size:10px}.stage.done .dot{background:var(--aqua);color:#12333a}.stage.current{border-color:var(--violet);background:rgba(137,119,255,.13)}.stage.current .dot{background:var(--violet);color:#fff}.stage.locked{opacity:.55}.meta{font-size:10px;color:var(--muted);margin-left:auto;text-align:right}.error{color:#ff9db4;font-size:11px}@media(max-width:640px){.wrap{width:min(100% - 24px,1040px)}.top{height:auto;padding:15px 0}.stage{align-items:start}.meta{display:none}}</style></head><body><header class="wrap top"><a class="brand" href="/"><div class="mark">N</div><div><b>NIOS Best Academy</b><span>Student admission status</span></div></a><a class="back" href="/">← Home</a></header><main class="wrap"><section class="hero"><div class="eyebrow">RESTRICTED STUDENT DESK</div><h1>Payment received — admission processing is underway.</h1><p>Your learning tools are protected until NIOS verification is confirmed. You can return here any time to view the live admission stages.</p></section><section class="notice"><b id="batch">Loading application…</b><span id="summary">Checking your secure application status</span></section><section class="stages" id="stages"></section><div class="error" id="error"></div></main><script>const session=JSON.parse(sessionStorage.getItem('niosSession')||'null');if(!session?.id)location.replace('/login');const steps=[['Payment Completed','Full payment has been captured for the selected batch.'],['Documents Submitted for Academy Review','Your subject choices and securely stored documents are waiting for academy review.'],['Official NIOS Registration Completed','The academy records your official NIOS enrollment number and date of birth.'],['Verification in Progress','The academy records and confirms your official NIOS status after review.'],['Admission Confirmed & Enrolment ID Generated','Full batch-specific learning access is now available.']];function escape(v){return String(v||'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}function level(e){if(e.status==='ACTIVE')return 5;if(e.status==='VERIFICATION_IN_PROGRESS')return 4;return 2}async function load(){try{const r=await fetch('/api/admission/intake'),data=await r.json();if(!r.ok)throw new Error(data.error||'Admission status unavailable.');const e=data.enrollment,n=level(e);document.getElementById('batch').textContent=e.assignedBatchCode||e.batch.name;document.getElementById('summary').textContent=e.status==='VERIFICATION_IN_PROGRESS'?'Academy review is in progress. Learning features remain locked until confirmation.':'Payment captured. The academy will begin official registration after review.';document.getElementById('stages').innerHTML=steps.map((step,index)=>{const stepNo=index+1,mode=stepNo<n?'done':stepNo===n?'current':'locked';return `<article class="stage ${mode}"><div class="dot">${stepNo<n?'✓':stepNo}</div><div><b>${step[0]}</b><span>${step[1]}</span></div><div class="meta">${stepNo<n?'Completed':stepNo===n?'Current stage':'Locked'}</div></article>`}).join('')}catch(error){document.getElementById('error').textContent=error.message}}load();</script><script src="/student-assistant.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Admission Status — NIOS Best Academy</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root{--bg:#0c0c29;--ink:#f5f3ff;--muted:#aaa8ca;--line:rgba(207,201,255,.17);--violet:#8977ff;--aqua:#55d9d0;--gold:#ffc36b;--rose:#ffabc0}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 10% 0,rgba(102,80,221,.31),transparent 40%),var(--bg);color:var(--ink);font:15px/1.5 "DM Sans",sans-serif}.wrap{width:min(100% - 34px,1040px);margin:auto}.top{height:76px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.brand{display:flex;gap:9px;align-items:center;color:#fff;text-decoration:none}.mark{height:35px;width:35px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(145deg,#ac9fff,#604bdb);font:800 16px "Plus Jakarta Sans"}.brand b{font:700 15px "Plus Jakarta Sans";display:block}.brand span{display:block;color:var(--muted);font-size:9px}.back{font-size:10px;color:#cac4ff;text-decoration:none}.hero{padding:46px 0 26px}.eyebrow{font-size:10px;letter-spacing:.14em;font-weight:700;color:#ddd9ff}.hero h1{font:600 clamp(30px,4.5vw,47px)/1.14 "Plus Jakarta Sans";letter-spacing:-.065em;margin:7px 0}.hero p{color:#d0cbea;font-size:13px;margin:0;max-width:690px}.notice,.action-notice{margin:20px 0;padding:16px;border:1px solid rgba(85,217,208,.22);border-radius:15px;background:rgba(85,217,208,.08)}.notice b,.action-notice b{display:block;color:var(--aqua);font:600 14px "Plus Jakarta Sans"}.notice span,.action-notice span{font-size:11px;color:#c8e7e5}.action-notice{border-color:rgba(255,195,107,.32);background:rgba(255,195,107,.1)}.action-notice b{color:var(--gold)}.action-notice span{display:block;color:#f0dbb6;margin-top:4px}.action-notice a{display:inline-block;margin-top:11px;padding:8px 10px;border-radius:9px;background:rgba(137,119,255,.23);border:1px solid rgba(190,180,255,.28);color:#f4f1ff;text-decoration:none;font-size:11px;font-weight:700}.action-notice small{display:block;margin-top:9px;color:#d7c9b2;font-size:10px}.stages{display:grid;gap:10px;padding-bottom:48px}.stage{display:flex;gap:13px;align-items:center;padding:15px 17px;border:1px solid var(--line);border-radius:14px;background:rgba(31,30,82,.76)}.dot{height:31px;width:31px;border-radius:50%;display:grid;place-items:center;background:rgba(255,255,255,.08);color:var(--muted);font-size:12px}.stage b{display:block;font-size:13px}.stage span{display:block;color:var(--muted);font-size:10px}.stage.done .dot{background:var(--aqua);color:#12333a}.stage.current{border-color:var(--violet);background:rgba(137,119,255,.13)}.stage.current .dot{background:var(--violet);color:#fff}.stage.locked{opacity:.55}.meta{font-size:10px;color:var(--muted);margin-left:auto;text-align:right}.error{color:var(--rose);font-size:11px}@media(max-width:640px){.wrap{width:min(100% - 24px,1040px)}.top{height:auto;padding:15px 0}.stage{align-items:start}.meta{display:none}}
+  </style>
+</head>
+<body>
+  <header class="wrap top">
+    <a class="brand" href="/"><div class="mark">N</div><div><b>NIOS Best Academy</b><span>Student admission status</span></div></a>
+    <a class="back" href="/">← Home</a>
+  </header>
+  <main class="wrap">
+    <section class="hero">
+      <div class="eyebrow">RESTRICTED STUDENT DESK</div>
+      <h1 id="heroTitle">Payment received — admission processing is underway.</h1>
+      <p id="heroCopy">Your learning tools are protected until NIOS verification is confirmed. You can return here any time to view the live admission stages.</p>
+    </section>
+    <section class="notice" aria-live="polite">
+      <b id="batch">Loading application…</b>
+      <span id="summary">Checking your secure application status</span>
+    </section>
+    <section class="action-notice" id="actionNotice" hidden aria-live="polite">
+      <b>Action needed from you</b>
+      <span id="actionCopy"></span>
+      <a href="/contact.html#form">Contact academy support securely</a>
+      <small>Do not send passwords, OTPs, card details, or full ID numbers through a message.</small>
+    </section>
+    <section class="stages" id="stages" aria-live="polite"></section>
+    <div class="error" id="error" role="alert"></div>
+  </main>
+  <script>
+    const session=JSON.parse(sessionStorage.getItem('niosSession')||'null');
+    if(!session?.id) location.replace('/login');
+    const steps=[
+      ['Payment Completed','Full payment has been captured for the selected batch.'],
+      ['Documents Submitted for Academy Review','Your subject choices and securely stored documents are waiting for academy review.'],
+      ['Official NIOS Registration Completed','The academy records your official NIOS enrollment number and date of birth.'],
+      ['Verification in Progress','The academy records and confirms your official NIOS status after review.'],
+      ['Admission Confirmed & Enrolment ID Generated','Full batch-specific learning access is now available.']
+    ];
+    const byId=id=>document.getElementById(id);
+    function level(enrollment){
+      if(enrollment.status==='ACTIVE') return 5;
+      if(enrollment.status==='VERIFICATION_IN_PROGRESS') return 4;
+      return 2;
+    }
+    function renderStages(currentLevel,needsAction){
+      const fragment=document.createDocumentFragment();
+      steps.forEach((step,index)=>{
+        const stepNo=index+1,mode=stepNo<currentLevel?'done':stepNo===currentLevel?'current':'locked';
+        const item=document.createElement('article'); item.className=`stage ${mode}`;
+        const dot=document.createElement('div'); dot.className='dot'; dot.textContent=stepNo<currentLevel?'✓':String(stepNo);
+        const copy=document.createElement('div'),title=document.createElement('b'),description=document.createElement('span'),meta=document.createElement('div');
+        title.textContent=step[0]; description.textContent=step[1]; meta.className='meta';
+        meta.textContent=stepNo<currentLevel?'Completed':stepNo===currentLevel?(needsAction?'Action needed':'Current stage'):'Locked';
+        copy.append(title,description); item.append(dot,copy,meta); fragment.append(item);
+      });
+      byId('stages').replaceChildren(fragment);
+    }
+    function render(enrollment){
+      const needsAction=enrollment.status==='NEEDS_ACTION';
+      byId('batch').textContent=enrollment.assignedBatchCode||enrollment.batch?.name||'Selected batch';
+      byId('actionNotice').hidden=!needsAction;
+      if(needsAction){
+        byId('heroTitle').textContent='Your admission needs one update before it can continue.';
+        byId('heroCopy').textContent='Your payment remains recorded. The academy needs a clarification or document update before official registration can move forward.';
+        byId('summary').textContent='Action needed — please review the academy note below.';
+        byId('actionCopy').textContent=enrollment.adminNote?`Academy note: ${enrollment.adminNote}`:'The academy needs an update before official registration can continue. Contact support to confirm the next secure step.';
+      }else if(enrollment.status==='VERIFICATION_IN_PROGRESS'){
+        byId('heroTitle').textContent='Official verification is in progress.';
+        byId('heroCopy').textContent='Your payment and application are recorded. Learning features remain locked until the academy confirms the official admission status.';
+        byId('summary').textContent='Academy review is in progress. Learning features remain locked until confirmation.';
+      }else{
+        byId('heroTitle').textContent='Payment received — admission processing is underway.';
+        byId('heroCopy').textContent='Your learning tools are protected until NIOS verification is confirmed. You can return here any time to view the live admission stages.';
+        byId('summary').textContent='Payment captured. The academy will begin official registration after review.';
+      }
+      renderStages(level(enrollment),needsAction);
+    }
+    async function load(){
+      try{
+        const response=await fetch('/api/admission/intake'),data=await response.json();
+        if(!response.ok) throw new Error(data.error||'Admission status unavailable.');
+        render(data.enrollment);
+      }catch(error){byId('error').textContent=error.message}
+    }
+    load();
+  </script>
+  <script src="/student-assistant.js"></script>
+</body>
+</html>

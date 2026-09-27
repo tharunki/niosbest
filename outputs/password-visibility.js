@@ -1,4 +1,14 @@
 (() => {
+  // A standalone PDF purchase must never inherit an old course-enrolment
+  // draft. The resource checkout has its own post-sign-in route.
+  const resource = new URLSearchParams(location.search).get('resource');
+  if (/^(tma|study|pyq)-(10|12)-[a-z-]+$/.test(resource || '')) {
+    localStorage.removeItem('niosEnrollIntent');
+    document.querySelectorAll('.intent').forEach(item => {
+      item.textContent = '';
+      item.classList.remove('show');
+    });
+  }
   const style = document.createElement('style');
   style.textContent = '.password-control{position:relative}.password-control input{padding-right:52px!important}.password-eye{position:absolute;right:3px;top:50%;transform:translateY(-50%);width:44px;height:44px;display:grid;place-items:center;background:transparent;border:0;border-radius:8px;color:#c7bdff;cursor:pointer}.password-eye:hover{background:rgba(137,119,255,.15)}.password-eye:focus-visible{outline:2px solid #b6acff;outline-offset:1px}.password-eye svg{width:21px;height:21px;pointer-events:none}';
   document.head.append(style);
