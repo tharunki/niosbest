@@ -710,6 +710,8 @@ const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 async function serveStatic(pathname, response, request) {
   // Never expose backend configuration, state, credentials or QA artifacts.
   if (pathname.includes('\\') || pathname.split('/').some(part => part.startsWith('.')) || pathname.startsWith('/portal-service/')) return send(response, 404, { error: 'Not found' });
+  // Keep the legacy direct URL on the same clear owner-only staff experience.
+  if (pathname === '/admin/staff' || pathname === '/admin-staff.html') pathname = '/admin-staff-v2.html';
   const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
   let requested = pathname === '/' ? '/index.html' : (aliases[pathname] || pathname);
   if (!extname(requested)) requested += '.html';
@@ -742,7 +744,9 @@ async function serveStatic(pathname, response, request) {
   if (!file.startsWith(root)) return send(response, 403, { error: 'Forbidden' });
   try {
     const details = await stat(file); if (!details.isFile()) throw new Error('Not a file');
-    const extension = extname(file).toLowerCase(), isAppShell = extension === '.html' || extension === '.webmanifest' || requested.endsWith('-sw.js');
+    // Assets use readable, non-hashed filenames. Revalidate app code on every
+    // visit so a deployed UI/security fix is not hidden behind a one-hour cache.
+    const extension = extname(file).toLowerCase(), isAppShell = ['.html', '.webmanifest', '.js', '.css'].includes(extension) || requested.endsWith('-sw.js');
     const etag = `W/"${details.size}-${Math.trunc(details.mtimeMs)}"`;
     const headers = {
       'content-type': mime[extension] || 'application/octet-stream',
@@ -1037,7 +1041,26 @@ const server = createServer(async (request, response) => {
       const startsAt = new Date(startMs).toISOString();
       const meeting = suppliedLiveUrl ? { liveUrl: suppliedLiveUrl, hostUrl: null, meetingProvider: 'external' } : await createZoomMeeting({ title, startsAt, durationMinutes });
       const created = await updateState(data => { const item = { id: uid('class'), ...target, title, startsAt, durationMinutes, ...meeting, recordingUrl: null, createdBy: staff.sub, createdAt: now() }; data.liveClasses.push(item); data.audit.push({ id: uid('audit'), at: now(), action: 'live-class.scheduled', batchId: item.batchId, classId: item.id, staffId: staff.sub, meetingProvider: item.meetingProvider }); return item; });
-      const current = await readState(); for (const enrollment of current.enrollments.filter(item => item.batchId === created.batchId && item.status === 'ACTIVE')) { const student = current.students.find(item => item.id === enrollment.studentId); if (student) await sendNotification(student, `${created.subject} live class scheduled: ${created.title}.`); emit(enrollment.studentId, 'live-class.scheduled', classroomView(created)); } return send(response, 201, teacherClassroomView(created));
+      const current = await readState(), notification = { attempted: 0, delivered: 0, failed: 0 };
+      for (const enrollment of current.enrollments.filter(item => item.batchId === created.batchId && item.status === 'ACTIVE')) {
+        const student = current.students.find(item => item.id === enrollment.studentId);
+        if (!student) continue;
+        notification.attempted += 1;
+        try {
+          await sendNotification(student, `${created.subject} live class scheduled: ${created.title}.`);
+          notification.delivered += 1;
+        } catch (error) {
+          // The class is already scheduled. A notification failure must not turn
+          // that successful action into a misleading error or invite duplicates.
+          notification.failed += 1;
+          console.warn('Live-class notification failed:', error.message);
+          await updateState(data => {
+            data.audit.push({ id: uid('audit'), at: now(), action: 'live-class.notification-failed', classId: created.id, studentId: student.id, reason: String(error.message || 'Notification delivery failed.').slice(0, 300) });
+          });
+        }
+        emit(enrollment.studentId, 'live-class.scheduled', classroomView(created));
+      }
+      return send(response, 201, { ...teacherClassroomView(created), notification });
     }
     if (method === 'POST' && path === '/api/teacher/homework') {
       const input = await body(request), state = await readState(), target = targetForBatch(input, state), staff = requireTeacherPermission(request, state, 'manageHomework', target.batchId), title = String(input.title || '').trim(), instructions = String(input.instructions || '').trim(), dueMs = Date.parse(String(input.dueAt || ''));
