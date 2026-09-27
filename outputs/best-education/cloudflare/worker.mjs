@@ -14,6 +14,7 @@ const ALLOWED_TYPES = new Set(['sample', 'pyq', 'mcq', 'important']);
 const ALLOWED_CLASSES = new Set(['10', '11', '12']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9-]{1,80}$/;
+const PAPER_STORAGE_UNAVAILABLE = 'Secure PDF storage is not configured yet. PDF uploads, purchases, and downloads are temporarily unavailable.';
 
 const scienceLessons = [
   'Chemical Reactions and Equations', 'Acids, Bases and Salts', 'Metals and Non-metals',
@@ -49,6 +50,39 @@ function text(body, status = 200, contentType = 'text/plain; charset=utf-8', ext
     status,
     headers: { ...securityHeaders(contentType), 'Cache-Control': 'no-store', ...extraHeaders }
   });
+}
+
+class PaperStorageUnavailableError extends Error {
+  constructor() {
+    super(PAPER_STORAGE_UNAVAILABLE);
+    this.name = 'PaperStorageUnavailableError';
+  }
+}
+
+// `PAPERS` is an optional R2 binding while the site is being set up. Do not
+// let an absent binding turn otherwise healthy catalogue/admin pages into 500s.
+function hasPaperStorage(env) {
+  const papers = env?.PAPERS;
+  return Boolean(papers
+    && typeof papers.head === 'function'
+    && typeof papers.get === 'function'
+    && typeof papers.put === 'function'
+    && typeof papers.delete === 'function'
+    && typeof papers.list === 'function');
+}
+
+function requirePaperStorage(env) {
+  if (!hasPaperStorage(env)) throw new PaperStorageUnavailableError();
+  return env.PAPERS;
+}
+
+function paperStorageUnavailableResponse() {
+  return json({ error: PAPER_STORAGE_UNAVAILABLE, code: 'PAPER_STORAGE_UNAVAILABLE' }, 503);
+}
+
+function apiErrorResponse(error, fallback, status = 400) {
+  if (error instanceof PaperStorageUnavailableError) return paperStorageUnavailableResponse();
+  return json({ error: error instanceof Error && error.message ? error.message : fallback }, status);
 }
 
 function secureStaticPage(response, request) {
@@ -270,9 +304,9 @@ function rowToCard(row) {
   };
 }
 
-function publicCard(card) {
+function publicCard(card, storageReady = true) {
   const { fileKey, ...safe } = card;
-  return { ...safe, available: Boolean(fileKey) && cardIsPubliclyVisible(card) };
+  return { ...safe, available: Boolean(fileKey) && storageReady && cardIsPubliclyVisible(card) };
 }
 
 async function readCards(env) {
@@ -576,7 +610,7 @@ async function cleanCard(env, input, existing = null) {
   }
   if (fileKey) {
     fileKey = safePdfFilename(fileKey);
-    if (!await env.PAPERS.head(fileKey)) throw new Error('Upload the selected PDF before linking it to a card.');
+    if (!await requirePaperStorage(env).head(fileKey)) throw new Error('Upload the selected PDF before linking it to a card.');
   }
   const id = existing?.id || crypto.randomUUID();
   const desiredSlug = String(input.slug || '').trim() || existing?.slug || `${type}-class-${className}-${subject}-${title}`;
@@ -731,7 +765,8 @@ function seedPapers() {
 }
 
 async function allPapers(env) {
-  const cards = (await readCards(env)).filter(cardIsPubliclyVisible).map(publicCard);
+  const storageReady = hasPaperStorage(env);
+  const cards = (await readCards(env)).filter(cardIsPubliclyVisible).map((card) => publicCard(card, storageReady));
   const cardSlugs = new Set(cards.map((card) => card.slug));
   return [...cards, ...seedPapers().filter((paper) => !cardSlugs.has(paper.slug))];
 }
@@ -807,7 +842,8 @@ async function filterPapers(env, searchParams) {
   }
   const statement = env.DB.prepare(cardSelectSql(clauses.join(' AND '), 'c.sort_order ASC, c.updated_at DESC', '100'));
   const boundStatement = bindings.length ? statement.bind(...bindings) : statement;
-  const custom = ((await boundStatement.all()).results || []).map(rowToCard).map(publicCard);
+  const storageReady = hasPaperStorage(env);
+  const custom = ((await boundStatement.all()).results || []).map(rowToCard).map((card) => publicCard(card, storageReady));
   const customSlugs = new Set(custom.map((paper) => paper.slug));
   const filters = { query, className, subject, type };
   const seeds = seedPapers().filter((paper) => !customSlugs.has(paper.slug) && matchesPaper(paper, filters));
@@ -816,7 +852,7 @@ async function filterPapers(env, searchParams) {
 
 async function findPaperBySlug(env, slug) {
   const card = await getPublicCardBySlug(env, slug);
-  if (card) return publicCard(card);
+  if (card) return publicCard(card, hasPaperStorage(env));
   return seedPapers().find((paper) => paper.slug === slug) || null;
 }
 
@@ -838,6 +874,7 @@ function publicSection(section) {
 }
 
 async function publicCatalog(env) {
+  const storageReady = hasPaperStorage(env);
   const allSections = await readSections(env);
   const sectionsById = new Map(allSections.map((section) => [section.id, section]));
   const visibleSections = allSections.filter((section) => section.isPublished
@@ -856,8 +893,8 @@ async function publicCatalog(env) {
   const unsectionedCards = [];
   for (const card of (await readCards(env)).filter(cardIsPubliclyVisible)) {
     const target = card.sectionId ? nodes.get(card.sectionId) : null;
-    if (target) target.cards.push(publicCard(card));
-    else if (!card.sectionId) unsectionedCards.push(publicCard(card));
+    if (target) target.cards.push(publicCard(card, storageReady));
+    else if (!card.sectionId) unsectionedCards.push(publicCard(card, storageReady));
   }
   return { sections: roots, cards: unsectionedCards };
 }
@@ -882,6 +919,7 @@ async function readDownloadToken(env, token) {
 }
 
 async function secureDownload(request, env, token) {
+  if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
   if (!env.DOWNLOAD_TOKEN_SECRET || String(env.DOWNLOAD_TOKEN_SECRET).length < 32) {
     return json({ error: 'Secure downloads are not configured yet.' }, 503);
   }
@@ -981,6 +1019,9 @@ async function paymentWebhook(request, env) {
     const signature = request.headers.get('X-Razorpay-Signature') || '';
     const expected = await hmac(new Uint8Array(raw), env.RAZORPAY_WEBHOOK_SECRET);
     if (!(await secureEqual(signature, expected))) return json({ error: 'Invalid webhook signature.' }, 400);
+    // Ask Razorpay to retry a valid event rather than marking a payment as
+    // fulfilled while the secure file store is not available.
+    if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
     const event = JSON.parse(decoder.decode(raw));
     const payment = event?.payload?.payment?.entity;
     if (!payment?.order_id) return json({ ok: true });
@@ -1049,10 +1090,11 @@ function adminCookie(token, maxAge, secure) {
 }
 
 async function listPdfFiles(env) {
+  const papers = requirePaperStorage(env);
   const files = [];
   let cursor;
   do {
-    const page = await env.PAPERS.list({ cursor, limit: 1000 });
+    const page = await papers.list({ cursor, limit: 1000 });
     files.push(...page.objects.filter((object) => /\.pdf$/i.test(object.key)).map((object) => object.key));
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor);
@@ -1101,7 +1143,11 @@ async function renderSitemap(request, env) {
   const origin = new URL(request.url).origin;
   const pages = ['/', '/library.html', '/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html'];
   const fixed = pages.map((page) => `  <url><loc>${escapeXml(`${origin}${page}`)}</loc></url>`);
-  const cards = (await readCards(env)).filter((card) => card.fileKey && cardIsPubliclyVisible(card));
+  // Do not publish product URLs to search engines until protected storage is
+  // connected and the PDF could actually be delivered after payment.
+  const cards = hasPaperStorage(env)
+    ? (await readCards(env)).filter((card) => card.fileKey && cardIsPubliclyVisible(card))
+    : [];
   const cardUrls = cards.map((card) => `  <url><loc>${escapeXml(`${origin}/paper/${card.slug}`)}</loc><lastmod>${card.updatedAt.slice(0, 10)}</lastmod></url>`);
   return text(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${[...fixed, ...cardUrls].join('\n')}\n</urlset>\n`, 200, 'application/xml; charset=utf-8');
 }
@@ -1149,7 +1195,10 @@ async function api(request, env, url) {
     return json({ ok: true, platform: 'cloudflare' });
   }
   if (request.method === 'GET' && url.pathname === '/api/catalog') return json(await publicCatalog(env));
-  if (request.method === 'GET' && url.pathname === '/api/cards') return json({ cards: (await filteredCards(env, url.searchParams)).map(publicCard) });
+  if (request.method === 'GET' && url.pathname === '/api/cards') {
+    const storageReady = hasPaperStorage(env);
+    return json({ cards: (await filteredCards(env, url.searchParams)).map((card) => publicCard(card, storageReady)) });
+  }
   if (request.method === 'GET' && url.pathname === '/api/papers') return json({ papers: await filterPapers(env, url.searchParams) });
   const slugMatch = url.pathname.match(/^\/api\/papers\/slug\/([a-z0-9-]+)$/i);
   if (request.method === 'GET' && slugMatch) {
@@ -1180,6 +1229,7 @@ async function api(request, env, url) {
   }
   const checkoutMatch = url.pathname.match(/^\/api\/checkout\/([a-z0-9-]+)$/i);
   if (request.method === 'POST' && checkoutMatch) {
+    if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
     const card = await getCardBySlug(env, checkoutMatch[1]);
     if (!card?.fileKey || !cardIsPubliclyVisible(card) || !await env.PAPERS.head(card.fileKey)) return json({ error: 'This paper is not ready for secure purchase yet.' }, 404);
     if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return json({ error: 'Secure payments are not configured yet. The administrator must add Razorpay credentials.' }, 503);
@@ -1200,6 +1250,7 @@ async function api(request, env, url) {
     return json({ key: env.RAZORPAY_KEY_ID, order: { id: order.id, amount, currency: 'INR' }, recovery: { token: recoveryToken, expiresAt: recoveryExpiresAt }, paper: publicCard(card) });
   }
   if (request.method === 'POST' && url.pathname === '/api/payment/verify') {
+    if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
     try {
       if (!env.RAZORPAY_KEY_SECRET || !env.DOWNLOAD_TOKEN_SECRET) throw new Error('Secure payments are not configured yet.');
       const input = await readJson(request);
@@ -1216,6 +1267,7 @@ async function api(request, env, url) {
     }
   }
   if (request.method === 'POST' && url.pathname === '/api/payment/recover') {
+    if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
     try {
       if (!env.RAZORPAY_KEY_SECRET || !env.DOWNLOAD_TOKEN_SECRET) throw new Error('Secure payments are not configured yet.');
       const input = await readJson(request);
@@ -1275,8 +1327,12 @@ async function api(request, env, url) {
     return json({ ok: true });
   }
   if (request.method === 'GET' && url.pathname === '/api/admin/cards') return json({ cards: await readCards(env) });
-  if (request.method === 'GET' && url.pathname === '/api/admin/files') return json({ files: await listPdfFiles(env) });
+  if (request.method === 'GET' && url.pathname === '/api/admin/files') {
+    if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
+    return json({ files: await listPdfFiles(env) });
+  }
   if (request.method === 'POST' && url.pathname === '/api/admin/files') {
+    if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
     try {
       const contentType = String(request.headers.get('Content-Type') || '').toLowerCase();
       if (!contentType.startsWith('application/pdf')) throw new Error('Upload a PDF file.');
@@ -1288,11 +1344,12 @@ async function api(request, env, url) {
       await env.PAPERS.put(filename, pdfUploadStream(request.body), { httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${filename}"` } });
       return json({ file: filename }, 201);
     } catch (error) {
-      return json({ error: error.message || 'The PDF could not be uploaded.' }, 400);
+      return apiErrorResponse(error, 'The PDF could not be uploaded.');
     }
   }
   const fileMatch = url.pathname.match(/^\/api\/admin\/files\/([^/]+)$/);
   if (request.method === 'DELETE' && fileMatch) {
+    if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
     try {
       const filename = safePdfFilename(decodeURIComponent(fileMatch[1]));
       const references = await env.DB.prepare('SELECT COUNT(*) AS count FROM cards WHERE file_key = ?').bind(filename).first();
@@ -1302,7 +1359,7 @@ async function api(request, env, url) {
       await env.PAPERS.delete(filename);
       return json({ ok: true });
     } catch (error) {
-      return json({ error: error.message || 'The PDF could not be deleted.' }, 400);
+      return apiErrorResponse(error, 'The PDF could not be deleted.');
     }
   }
   const cardMatch = url.pathname.match(/^\/api\/admin\/cards\/([a-zA-Z0-9-]+)$/);
@@ -1311,7 +1368,7 @@ async function api(request, env, url) {
       const card = await insertCard(env, await cleanCard(env, await readJson(request)));
       return json({ card }, 201);
     }
-    catch (error) { return json({ error: error.message || 'The study card could not be saved.' }, 400); }
+    catch (error) { return apiErrorResponse(error, 'The study card could not be saved.'); }
   }
   if (request.method === 'PUT' && cardMatch) {
     try {
@@ -1325,7 +1382,7 @@ async function api(request, env, url) {
         return json({ error: 'Keep this paid card published in its current catalogue section until active download links have expired (up to 24 hours).' }, 409);
       }
       return json({ card: await updateCard(env, card) });
-    } catch (error) { return json({ error: error.message || 'The study card could not be updated.' }, 400); }
+    } catch (error) { return apiErrorResponse(error, 'The study card could not be updated.'); }
   }
   if (request.method === 'DELETE' && cardMatch) {
     if (await hasActivePaidDownload(env, cardMatch[1])) return json({ error: 'This card has a paid download link that can remain active for up to 24 hours.' }, 409);
@@ -1340,7 +1397,9 @@ async function api(request, env, url) {
       if (!Array.isArray(source) || source.length > 500) throw new Error('Choose a valid backup with no more than 500 cards.');
       if (sourceSections !== undefined && (!Array.isArray(sourceSections) || sourceSections.length > 200)) throw new Error('Choose a valid backup with no more than 200 catalogue sections.');
       if (await hasAnyActivePaidDownloads(env)) throw new Error('Wait until active paid download links expire before importing a full card backup.');
-      const pdfFiles = new Set(await listPdfFiles(env));
+      const backupUsesPdfs = source.some((card) => String(card?.fileKey || '').trim());
+      if (backupUsesPdfs && !hasPaperStorage(env)) return paperStorageUnavailableResponse();
+      const pdfFiles = backupUsesPdfs ? new Set(await listPdfFiles(env)) : new Set();
       const usedSlugs = new Set();
       let sectionContexts;
       let parsedSections = null;
@@ -1370,7 +1429,7 @@ async function api(request, env, url) {
         await env.DB.batch([env.DB.prepare('DELETE FROM cards'), bulkCardImportStatement(env, parsed)]);
       }
       return json({ count: parsed.length, sections: parsedSections?.length });
-    } catch (error) { return json({ error: error.message || 'The backup could not be imported.' }, 400); }
+    } catch (error) { return apiErrorResponse(error, 'The backup could not be imported.'); }
   }
   return json({ error: 'Not found.' }, 404);
 }

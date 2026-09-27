@@ -37,7 +37,12 @@ function showToast(message, kind = 'success') { clearTimeout(toastTimer); toast.
 async function request(url, options = {}) {
   const response = await fetch(url, { ...options, headers:{ Accept:'application/json', ...(options.body ? { 'Content-Type':'application/json' } : {}), ...options.headers } });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.error || 'The request could not be completed.');
+  if (!response.ok) {
+    const error = new Error(data.error || 'The request could not be completed.');
+    error.status = response.status;
+    error.code = data.code;
+    throw error;
+  }
   return data;
 }
 function roots() { return sections.filter(section => !section.parentId); }
@@ -131,9 +136,9 @@ async function removeSection(id) {
     showToast('Library section removed.');
   } catch (error) { showToast(error.message, 'error'); }
 }
-function renderFiles(files = []) {
+function renderFiles(files = [], emptyMessage = 'No protected PDFs have been uploaded yet.') {
   if (!fileList) return;
-  fileList.innerHTML = files.length ? files.map(file => `<div class="pdf-file"><span>${escapeHTML(file)}</span><button class="remove delete-file" type="button" data-file="${escapeHTML(file)}">Remove</button></div>`).join('') : '<p class="notice">No protected PDFs have been uploaded yet.</p>';
+  fileList.innerHTML = files.length ? files.map(file => `<div class="pdf-file"><span>${escapeHTML(file)}</span><button class="remove delete-file" type="button" data-file="${escapeHTML(file)}">Remove</button></div>`).join('') : `<p class="notice">${escapeHTML(emptyMessage)}</p>`;
   fileList.querySelectorAll('.delete-file').forEach(button => button.addEventListener('click', () => removePdf(button.dataset.file)));
 }
 function refreshSubjects() {
@@ -147,10 +152,31 @@ async function loadFiles(selected = value('fileKey')) {
   try {
     const data = await request('/api/admin/files');
     const files = Array.isArray(data.files) ? data.files : [];
+    select.disabled = false;
+    uploadInput.disabled = false;
+    uploadButton.disabled = false;
+    uploadName.textContent = 'Maximum file size: 25 MB.';
     select.innerHTML = `<option value="">Not ready for sale yet</option>${files.map(file => `<option value="${escapeHTML(file)}">${escapeHTML(file)}</option>`).join('')}`;
     if ([...select.options].some(option => option.value === selected)) select.value = selected;
     renderFiles(files);
-  } catch { select.innerHTML = '<option value="">No protected PDFs found</option>'; renderFiles([]); }
+  } catch (error) {
+    if (error.status === 503 && error.code === 'PAPER_STORAGE_UNAVAILABLE') {
+      const message = 'Secure PDF storage is not configured yet. You can create sections and draft cards, but uploads and paid PDF access stay disabled until it is connected.';
+      select.disabled = true;
+      uploadInput.disabled = true;
+      uploadButton.disabled = true;
+      select.innerHTML = `<option value="${escapeHTML(selected || '')}">${escapeHTML(selected ? `${selected} — storage unavailable` : 'Protected storage unavailable')}</option>`;
+      if (selected) select.value = selected;
+      uploadName.textContent = 'Connect protected PDF storage before uploading or selling PDFs.';
+      renderFiles([], message);
+      return;
+    }
+    select.disabled = false;
+    uploadInput.disabled = false;
+    uploadButton.disabled = false;
+    select.innerHTML = '<option value="">No protected PDFs found</option>';
+    renderFiles([]);
+  }
 }
 function resetForm() {
   editingId = null;

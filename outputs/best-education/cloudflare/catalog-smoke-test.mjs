@@ -36,7 +36,9 @@ const env = {
   PAPERS: {
     async head(name) { return storedFiles.has(name) ? { size: 1 } : null; },
     async list() { return { objects: [...storedFiles].map((key) => ({ key })), truncated: false }; },
-    async get() { return null; }
+    async get() { return null; },
+    async put(name) { storedFiles.add(name); },
+    async delete(name) { storedFiles.delete(name); }
   },
   ADMIN_PASSWORD: 'a-long-test-password',
   DOWNLOAD_TOKEN_SECRET: 'a-long-test-download-secret-that-is-over-32-characters'
@@ -100,6 +102,31 @@ response = await call(adminRequest('/api/admin/cards', 'POST', {
 }, cookie));
 assert.equal(response.status, 201);
 const paidCard = (await response.json()).card;
+
+const withoutPaperStorage = { ...env, PAPERS: undefined };
+const callWithoutPaperStorage = (request) => worker.fetch(request, withoutPaperStorage);
+response = await callWithoutPaperStorage(new Request(`${origin}/api/papers/slug/${paidCard.slug}`));
+assert.equal(response.status, 200);
+assert.equal((await response.json()).paper.available, false, 'the public page must not advertise a buy button without protected storage');
+response = await callWithoutPaperStorage(adminRequest('/api/admin/files', 'GET', undefined, cookie));
+assert.equal(response.status, 503, 'the admin file list explains missing storage instead of crashing');
+assert.equal((await response.json()).code, 'PAPER_STORAGE_UNAVAILABLE');
+response = await callWithoutPaperStorage(new Request(`${origin}/api/admin/files`, {
+  method: 'POST',
+  headers: { Cookie: cookie, 'Content-Type': 'application/pdf', 'X-Upload-Filename': 'blocked.pdf' },
+  body: '%PDF-1.7\n'
+}));
+assert.equal(response.status, 503, 'the admin cannot upload files while storage is absent');
+response = await callWithoutPaperStorage(adminRequest('/api/admin/files/published.pdf', 'DELETE', undefined, cookie));
+assert.equal(response.status, 503, 'the admin cannot delete files while storage is absent');
+response = await callWithoutPaperStorage(adminRequest('/api/admin/cards', 'POST', {
+  sectionId: 'class-10-sample', title: 'Blocked PDF attachment', subject: 'Science', fileKey: 'published.pdf'
+}, cookie));
+assert.equal(response.status, 503, 'a PDF cannot be attached while storage is absent');
+response = await callWithoutPaperStorage(jsonRequest(`/api/checkout/${paidCard.slug}`, {}));
+assert.equal(response.status, 503, 'checkout is disabled before any payment order can be created without storage');
+response = await callWithoutPaperStorage(new Request(`${origin}/api/download/not-a-real-token`));
+assert.equal(response.status, 503, 'downloads explain missing storage instead of throwing');
 
 response = await call(new Request(`${origin}/api/cards?class=10&type=mcq`));
 assert.equal((await response.json()).cards.some((card) => card.id === legacyCard.id), true, 'legacy category endpoint remains compatible');
