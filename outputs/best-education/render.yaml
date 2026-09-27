@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: best-education
+    runtime: node
+    plan: 0.5c-512mb
+    buildCommand: npm install --ignore-scripts
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: 24.0.0
+      - key: NODE_ENV
+        value: production
+      - key: STORAGE_DIR
+        value: /var/data
+      - key: SITE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: DOWNLOAD_TOKEN_SECRET
+        sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+    disk:
+      name: best-education-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
+  <title>Content Manager | Best Education</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="admin.css">
+</head>
+<body>
+  <header class="top"><div class="brand"><img src="logo.png" alt="Best Education logo" width="42" height="42" decoding="async">Best Education</div><a href="index.html">View website →</a></header>
+  <main class="wrap">
+    <section class="panel login-panel" id="login-view"><p class="eyebrow">Protected administration</p><h1>Admin sign in</h1><p class="notice">Use the private admin password configured on the server.</p><form id="login-form"><label class="field" for="password">Admin password<input id="password" name="password" type="password" autocomplete="current-password" required></label><button class="save" type="submit">Sign in</button></form><p class="notice" id="login-status" role="status" aria-live="polite"></p></section>
+    <div id="dashboard" hidden>
+      <div class="head"><div><p class="eyebrow">Content manager</p><h1>Manage study material.</h1></div><p>Add, edit, back up or remove cards for every resource library. Published cards are shared with every visitor.</p></div>
+      <div class="layout">
+        <section class="panel"><h2 id="form-heading">New study card</h2><form id="card-form">
+          <label class="field" for="type">Material type<select id="type" name="type"><option value="sample">Sample Papers</option><option value="pyq">PYQs</option><option value="mcq">MCQs</option><option value="important">Important Questions</option></select></label>
+          <label class="field" for="className">Class<select id="className" name="className"><option value="10">Class 10</option><option value="11">Class 11</option><option value="12">Class 12</option></select></label>
+          <label class="field" for="subject">Subject<select id="subject" name="subject"></select></label>
+          <label class="field" for="title">Card title<input id="title" name="title" required maxlength="140" placeholder="e.g. Electricity: 50 MCQs"></label>
+          <label class="field" for="description">Short description<textarea id="description" name="description" maxlength="500" placeholder="What students will receive"></textarea></label>
+          <label class="field" for="price">Price in ₹<input id="price" name="price" type="number" min="1" max="9999" value="39" required></label>
+          <label class="check-field" for="isBundle"><input id="isBundle" name="isBundle" type="checkbox"> This is a full-course bundle (normally ₹399)</label>
+          <div class="upload-box"><strong>Protected PDF library</strong><span>Upload a PDF once, then attach it to any study card. Files are stored privately and never linked directly to students.</span><div><label class="secondary upload-label" for="upload-pdf">Choose PDF<input id="upload-pdf" type="file" accept="application/pdf,.pdf" hidden></label><button id="upload-button" class="secondary" type="button">Upload selected PDF</button></div><small id="upload-name" class="helper">Maximum file size: 25 MB.</small></div>
+          <label class="field" for="fileKey">Secure PDF file<select id="fileKey" name="fileKey"><option value="">Not ready for sale yet</option></select><small class="helper">Choose a PDF from the protected papers folder. Students receive it only after verified payment.</small></label>
+          <label class="field" for="link">Public preview link (optional)<input id="link" name="link" type="url" inputmode="url" placeholder="https://..."><small class="helper">Use only for a free preview. Never paste the paid PDF URL here.</small></label>
+          <div class="actions"><button class="save" type="submit">Save study card</button><button class="secondary" id="cancel-edit" type="button" hidden>Cancel edit</button></div>
+        </form><p class="notice">Content is saved in the shared database. Adding or editing a card automatically refreshes the sitemap.</p></section>
+        <section class="panel"><div class="toolbar"><button type="button" class="secondary" id="export-data">Export backup</button><label class="secondary" style="cursor:pointer">Import backup<input id="import-data" type="file" accept="application/json" hidden></label><button type="button" class="remove logout" id="logout">Sign out</button><input id="filter-cards" class="search" type="search" placeholder="Search saved cards" aria-label="Search saved cards"></div><p id="status" class="notice" role="status" aria-live="polite"></p><div id="cards"></div><section class="pdf-manager" aria-labelledby="pdf-heading"><h2 id="pdf-heading">Protected PDF files</h2><p class="notice">A PDF cannot be removed while a study card uses it.</p><div id="pdf-files"></div></section></section>
+      </div>
+    </div>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
+  <script src="admin.js"></script>
+</body>
+</html>
