@@ -359,6 +359,11 @@ function matchesPaper(paper, { query, className, subject, type }) {
     && (!query || haystack.includes(query));
 }
 
+function ftsExpression(query) {
+  const terms = [...new Set(String(query).match(/[a-z0-9]{3,}/g) || [])].slice(0, 12);
+  return terms.map((term) => `"${term.replace(/"/g, '""')}"`).join(' AND ');
+}
+
 async function filterPapers(env, searchParams) {
   const query = limitUtf8(String(searchParams.get('q') || '').trim().toLowerCase(), 100);
   const className = String(searchParams.get('class') || '');
@@ -370,8 +375,14 @@ async function filterPapers(env, searchParams) {
   if (subject) { clauses.push('LOWER(subject) = ?'); bindings.push(subject.toLowerCase()); }
   if (ALLOWED_TYPES.has(type)) { clauses.push('type = ?'); bindings.push(type); }
   if (query) {
-    clauses.push("instr(LOWER(class_name || ' ' || subject || ' ' || type || ' ' || title || ' ' || description), ?) > 0");
-    bindings.push(query);
+    const expression = ftsExpression(query);
+    if (expression) {
+      clauses.push('rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)');
+      bindings.push(expression);
+    } else {
+      clauses.push("instr(LOWER(class_name || ' ' || subject || ' ' || type || ' ' || title || ' ' || description), ?) > 0");
+      bindings.push(query);
+    }
   }
   const statement = env.DB.prepare(`SELECT * FROM cards${clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''} ORDER BY updated_at DESC LIMIT 100`);
   const boundStatement = bindings.length ? statement.bind(...bindings) : statement;
