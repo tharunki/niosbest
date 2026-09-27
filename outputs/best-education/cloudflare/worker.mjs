@@ -94,6 +94,19 @@ function secureStaticPage(response, request) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+// Static files use stable filenames, so keep the browser cache deliberately
+// short. This removes repeat-visit revalidation without leaving a revised
+// checkout/admin script stuck on a device for days.
+function cacheStaticAsset(response, request) {
+  const headers = new Headers(response.headers);
+  const pathname = new URL(request.url).pathname;
+  if (/\.(?:css|js|png|jpe?g|webp|avif|svg|ico|woff2?)$/i.test(pathname)) {
+    headers.set('Cache-Control', 'public, max-age=3600');
+  }
+  if (isWorkersDev(request.url)) headers.set('X-Robots-Tag', 'noindex, nofollow');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 function escapeHtml(value = '') {
   return String(value).replace(/[&<>'"]/g, (character) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;'
@@ -1444,7 +1457,7 @@ export default {
       const paperMatch = url.pathname.match(/^\/paper\/([a-z0-9-]+)$/i);
       if (paperMatch) return await renderPaperPage(request, env, paperMatch[1]);
       if (staticPagePaths.has(url.pathname)) return await renderStaticPage(request, env);
-      return env.ASSETS.fetch(request);
+      return cacheStaticAsset(await env.ASSETS.fetch(request), request);
     } catch (error) {
       console.error('Best Education Worker error', error);
       return json({ error: 'The service could not complete that request. Please try again.' }, 500);
