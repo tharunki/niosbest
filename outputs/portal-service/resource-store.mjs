@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 const subjects = {
   '10':['Hindi','English','Mathematics','Science','Social Science','Data Entry Operations'],
   '12':['Hindi','English','Mathematics','Physics','Chemistry','Biology','Economics','Business Studies','Accountancy','History','Geography','Political Science','Data Entry Operations']
@@ -8,6 +8,31 @@ export const catalogue = Object.entries(subjects).flatMap(([level,names])=>names
   title:'Class '+level+' '+subject+' '+({tma:'Solved TMA',study:'Study material',pyq:'PYQs'}[kind])
 }))));
 const fail=(status,message)=>{throw Object.assign(new Error(message),{status})};
+const auditId=()=>`audit_${randomBytes(9).toString('hex')}`;
+
+// The main Razorpay webhook is intentionally shared by course and PDF purchases.
+// This helper validates and records only a resource order that was explicitly
+// tagged when it was created. It never trusts an amount, product, or user ID
+// supplied by the webhook beyond using the locally stored order as the source
+// of truth.
+export function captureResourceOrder(state,capture){
+  const orderId=String(capture?.notes?.academyResourceOrderId||'');
+  if(!orderId)return null;
+  const order=(state.resourceOrders||[]).find(item=>item.id===orderId&&item.provider==='razorpay');
+  if(!order)fail(404,'Resource payment order not found.');
+  if(!order.providerOrderId||String(capture.order_id||'')!==order.providerOrderId)fail(409,'Resource payment order mismatch.');
+  if(capture.status!=='captured'||Number(capture.amount)!==Number(order.amount)||String(capture.currency||'').toUpperCase()!==String(order.currency||'').toUpperCase())fail(409,'Captured resource payment amount or currency does not match this order.');
+  if(!capture.id)fail(422,'The resource payment is missing its provider reference.');
+  if(order.status==='CAPTURED'){
+    if(order.providerReference&&order.providerReference!==capture.id)fail(409,'A different payment was already recorded for this resource order.');
+    return {order,duplicate:true};
+  }
+  order.status='CAPTURED';order.providerReference=capture.id;order.capturedAt=new Date().toISOString();
+  state.audit??=[];state.audit.push({id:auditId(),action:'store.payment-captured',orderId:order.id,userId:order.userId,providerReference:capture.id,at:order.capturedAt,source:'razorpay-webhook'});
+  return {order,duplicate:false};
+}
+
+const checkout=(order,keyId)=>({id:order.id,provider:order.provider,amount:order.amount,orderId:order.providerOrderId,keyId:order.provider==='razorpay'?keyId:undefined});
 export async function resourceStore(request,response,url,ctx) {
   const path=url.pathname, method=request.method;
   if(!path.startsWith('/api/store/'))return false;
@@ -43,21 +68,27 @@ export async function resourceStore(request,response,url,ctx) {
     if(owned(p.id)){send(response,200,{owned:true});return true}
     const provider=process.env.PAYMENT_PROVIDER||'mock';
     if(!['mock','razorpay'].includes(provider)||(isProduction&&provider==='mock'))fail(503,'Live payments are not configured.');
+    const existing=orders.find(item=>item.userId===userId&&item.productId===p.id&&item.provider===provider&&item.status==='CREATED'&&(provider!=='razorpay'||item.providerOrderId));
+    if(existing){send(response,200,{...checkout(existing,process.env.RAZORPAY_KEY_ID),reused:true});return true}
     const order={id:uid('resource'),userId,productId:p.id,amount:p.price*100,currency:'INR',status:'CREATED',provider};
+    await updateState(s=>{s.resourceOrders??=[];s.resourceOrders.push(order);s.audit??=[];s.audit.push({id:uid('audit'),action:'store.payment-order-created',orderId:order.id,userId,productId:p.id,at:new Date().toISOString()})});
     if(provider==='razorpay'){
       if(!process.env.RAZORPAY_KEY_ID||!process.env.RAZORPAY_KEY_SECRET)fail(503,'Razorpay is not configured.');
-      const upstream=await fetch('https://api.razorpay.com/v1/orders',{method:'POST',headers:{authorization:'Basic '+Buffer.from(process.env.RAZORPAY_KEY_ID+':'+process.env.RAZORPAY_KEY_SECRET).toString('base64'),'content-type':'application/json'},body:JSON.stringify({amount:order.amount,currency:'INR',receipt:order.id}),signal:AbortSignal.timeout(15000)});
-      if(!upstream.ok)fail(502,'Could not create payment order.');
+      let upstream;
+      try{upstream=await fetch('https://api.razorpay.com/v1/orders',{method:'POST',headers:{authorization:'Basic '+Buffer.from(process.env.RAZORPAY_KEY_ID+':'+process.env.RAZORPAY_KEY_SECRET).toString('base64'),'content-type':'application/json'},body:JSON.stringify({amount:order.amount,currency:'INR',receipt:order.id,notes:{academyResourceOrderId:order.id}}),signal:AbortSignal.timeout(15000)})}catch{upstream=null}
+      if(!upstream?.ok){await updateState(s=>{const current=(s.resourceOrders||[]).find(item=>item.id===order.id);if(current){current.status='FAILED';current.failureReason='provider-order-creation-failed';current.updatedAt=new Date().toISOString()}});fail(502,'Could not create payment order.');}
       order.providerOrderId=(await upstream.json()).id;
+      if(!order.providerOrderId){await updateState(s=>{const current=(s.resourceOrders||[]).find(item=>item.id===order.id);if(current){current.status='FAILED';current.failureReason='provider-order-id-missing';current.updatedAt=new Date().toISOString()}});fail(502,'Payment provider did not return an order ID.');}
+      await updateState(s=>{const current=(s.resourceOrders||[]).find(item=>item.id===order.id);if(current){current.providerOrderId=order.providerOrderId;current.updatedAt=new Date().toISOString()}});
     }
-    await updateState(s=>{s.resourceOrders??=[];s.resourceOrders.push(order)});
-    send(response,201,{id:order.id,provider,amount:order.amount,orderId:order.providerOrderId,keyId:provider==='razorpay'?process.env.RAZORPAY_KEY_ID:undefined});return true;
+    send(response,201,checkout(order,process.env.RAZORPAY_KEY_ID));return true;
   }
   const complete=path.match(/^\/api\/store\/orders\/([^/]+)\/complete$/);
   if(method==='POST'&&complete){
     const userId=user(),order=orders.find(o=>o.id===complete[1]&&o.userId===userId);
     if(!order)fail(404,'Order not found.');
     if(order.status!=='CAPTURED'){
+      let providerReference=null;
       if(order.provider==='mock'){if(isProduction||(process.env.PAYMENT_PROVIDER||'mock')!=='mock')fail(403,'Test payment is disabled.')}
       else {
         const input=await body(request),secret=process.env.RAZORPAY_KEY_SECRET;
@@ -69,8 +100,9 @@ export async function resourceStore(request,response,url,ctx) {
         if(!upstream.ok)fail(502,'Could not verify payment.');
         const paid=await upstream.json();
         if(paid.status!=='captured'||paid.amount!==order.amount||paid.currency!=='INR'||paid.order_id!==order.providerOrderId)fail(409,'Payment is not captured for the correct amount yet. Retry verification shortly.');
+        providerReference=String(input.razorpay_payment_id||'');
       }
-      await updateState(s=>{const current=s.resourceOrders.find(o=>o.id===order.id);current.status='CAPTURED';current.capturedAt=new Date().toISOString();s.audit.push({id:uid('audit'),action:'store.payment-captured',orderId:order.id,userId,at:current.capturedAt})});
+      await updateState(s=>{const current=s.resourceOrders.find(o=>o.id===order.id);if(!current)fail(404,'Order not found.');if(current.status==='CAPTURED')return;current.status='CAPTURED';current.providerReference=providerReference||current.providerReference||null;current.capturedAt=new Date().toISOString();s.audit.push({id:uid('audit'),action:'store.payment-captured',orderId:order.id,userId,providerReference:current.providerReference,at:current.capturedAt,source:order.provider==='razorpay'?'browser-verification':'development-mock'})});
     }
     send(response,200,{download:'/api/store/downloads/'+order.productId});return true;
   }

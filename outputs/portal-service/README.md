@@ -39,11 +39,13 @@ The addresses `niosbest.tvl@gmail.com` and `tkcrackjee@gmail.com` are permanent 
 The owner controls can assign teachers to specific batches, allow or deny live-class scheduling, homework creation, material uploads and grading, suspend a teacher account, and restrict or restore individual online classes. These rules are enforced by the API, not only by the interface.
 
 - Generate a new 32-byte key with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` and set `APP_ENCRYPTION_KEY`.
-- Use a fresh `PORTAL_STATE_DIR` for production; never deploy the local `.portal-data` directory. Set `BOOTSTRAP_ADMIN_EMAIL` and a unique 12+ character `BOOTSTRAP_ADMIN_PASSWORD` to create the first admin on the initial production start. Demo accounts are disabled in production and a startup check blocks any production state that contains them.
+- After `niosbest.in` is connected to this service and its HTTPS certificate is active, set `APP_PUBLIC_URL=https://niosbest.in`. Until that exact HTTPS origin is configured, the server deliberately returns `noindex` headers for public pages and serves a crawler-blocking `robots.txt` from preview hosts, so Render cannot compete with the real domain in search results.
+- Use Supabase Postgres for production application state. Apply [`migrations/001_portal_state.sql`](./migrations/001_portal_state.sql) in **Supabase Dashboard → SQL Editor**, then set `PORTAL_STATE_DRIVER=supabase`, `SUPABASE_URL`, and the server-only `SUPABASE_SERVICE_ROLE_KEY`. Leave `SUPABASE_STATE_SCHEMA=public`, `SUPABASE_STATE_TABLE=portal_state`, and `SUPABASE_STATE_ROW_ID=primary` at their defaults unless the migration was intentionally customized. `PORTAL_STATE_DIR` and `.portal-data` are development/test only; never deploy them as a production database. In production, the portal keeps public pages readable but rejects registration, uploads, payments, webhooks, and admin/teacher writes with `DURABLE_STATE_REQUIRED` until both the Supabase state store and remote object storage are configured. Set `BOOTSTRAP_ADMIN_EMAIL` and a unique 12+ character `BOOTSTRAP_ADMIN_PASSWORD` to create the first admin on the initial durable start. Demo accounts are disabled in production and a startup check blocks any production state that contains them.
 - Replace local storage with an S3-compatible bucket (`STORAGE_DRIVER=s3`) or Supabase Storage (`STORAGE_DRIVER=supabase`). For Supabase, `SUPABASE_SERVICE_ROLE_KEY` accepts either the modern server-only `sb_secret_...` key or a legacy `service_role` JWT. Stored documents remain private and are downloaded through this authenticated server endpoint.
 - Choose `NOTIFICATION_PROVIDER=resend-email` to send student alerts through the configured Resend sender; or choose Twilio SMS/WhatsApp, WATI, or a generic webhook by setting the corresponding notification variables.
 - Set `PAYMENT_PROVIDER=razorpay`, `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET`. The browser uses Razorpay's hosted checkout; the server verifies the returned signature and independently accepts only HMAC-verified `payment.captured` webhooks. Never activate an enrollment from a client-only success page.
 - Set `RESEND_API_KEY`, `ADMIN_ADMISSION_EMAIL`, and a verified `ADMISSION_EMAIL_FROM` for direct admin-inbox delivery; or use `ADMISSION_INTAKE_WEBHOOK_URL` for a trusted email/workflow bridge. The payload includes subject choices and protected document references; files remain in private storage and are downloaded only in the authenticated admin portal.
+- For automatic Zoom meeting creation, set `ZOOM_ACCOUNT_ID`, `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`, and `ZOOM_HOST_USER_ID`. The host value must be the licensed Zoom host's email address or Zoom user ID; Server-to-Server OAuth has no `/users/me` context. Teachers can always paste an approved HTTPS Zoom or Meet link instead.
 - Put an authorised server-to-server NIOS connector behind `OFFICIAL_NIOS_CONNECTOR_URL`; that connector must have written permission and perform the official authentication journey without defeating CAPTCHA, OTP, rate limits, or access controls.
 - Protect the admin API with `ADMIN_API_TOKEN`; in production, add real authentication/authorization ahead of the API gateway.
 
@@ -51,4 +53,17 @@ The owner controls can assign teachers to specific batches, allow or deny live-c
 
 The browser never receives portal credentials. Enrollment number, reference number, date of birth, and board code are encrypted with AES-256-GCM in the server-side vault. Sync runs only after an explicit `consent: true` vault request. The system records audit entries, emits internal browser events, and only sends notifications for newly issued documents.
 
-The local JSON repository is only a development datastore. Use a managed encrypted database, secret manager, object-storage retention policy, signed audit logs, and a documented deletion/consent process before handling real student data.
+The local JSON repository is only a development datastore. The Supabase migration stores one encrypted application-state snapshot with optimistic revision checks; it is a safe bridge away from Render's ephemeral filesystem, not a substitute for a future normalized database model and managed job queue. Use a secret manager, object-storage retention policy, signed audit logs, backups, and a documented deletion/consent process before handling real student data.
+
+### Moving an existing local state into Supabase
+
+Do this only during a maintenance window and only if the local file contains data you are legally allowed to migrate. First make an encrypted offline backup, run the SQL migration, and configure the production variables above. The first successful Supabase-backed start initializes an empty production state only when `portal_state` has no row. It never overwrites an existing row.
+
+If a deliberate one-time import is required, run the migration helper from a secure administrator machine (not the browser), with `PORTAL_STATE_IMPORT_FILE` pointing to the old `state.json`. The helper refuses to overwrite a non-empty destination and prints counts only, never student data. Rotate the local backup and securely delete it under your retention policy after verifying the live portal.
+
+```powershell
+$env:PORTAL_STATE_DRIVER = 'supabase'
+$env:PORTAL_STATE_IMPORT_FILE = 'C:\secure-backup\state.json'
+$env:IMPORT_PORTAL_STATE = 'confirm'
+node scripts/migrate-local-state-to-supabase.mjs
+```

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://niosbest.in/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
-  <url><loc>https://niosbest.in/academy-services.html</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://niosbest.in/updates.html</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
-  <url><loc>https://niosbest.in/contact.html</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://niosbest.in/academy-services</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://niosbest.in/updates</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://niosbest.in/contact</loc><changefreq>monthly</changefreq><priority>0.7</priority></url>
   <url><loc>https://niosbest.in/nios-admission-2026</loc><changefreq>monthly</changefreq><priority>0.9</priority></url>
   <url><loc>https://niosbest.in/nios-class-10-admission</loc><changefreq>monthly</changefreq><priority>0.9</priority></url>
   <url><loc>https://niosbest.in/nios-class-12-admission</loc><changefreq>monthly</changefreq><priority>0.9</priority></url>

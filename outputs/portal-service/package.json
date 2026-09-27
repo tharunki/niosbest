@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node --watch server.mjs",
-    "check": "node --check server.mjs"
+    "check": "node --check server.mjs && node --check state-store.mjs",
+    "test:state": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs",
+    "test:release": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs && node qa/release-security.test.mjs && node qa/canonical-seo-gate.test.mjs"
   },
   "engines": {
     "node": ">=20"

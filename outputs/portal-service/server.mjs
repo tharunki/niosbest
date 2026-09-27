@@ -1,7 +1,8 @@
 import { createServer } from 'node:http';
 import { counselorReply } from './counselor.mjs';
-import { resourceStore } from './resource-store.mjs';
-import { readFile, writeFile, mkdir, rename, stat } from 'node:fs/promises';
+import { captureResourceOrder, resourceStore } from './resource-store.mjs';
+import { createStateStore, resolveStateStoreConfig } from './state-store.mjs';
+import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
 import { createHash, createHmac, randomBytes, createCipheriv, createDecipheriv, timingSafeEqual, scryptSync } from 'node:crypto';
 import { dirname, extname, join, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +28,38 @@ const stateFile = join(stateDir, 'state.json');
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === 'production';
 const demosEnabled = !isProduction && process.env.ALLOW_DEMO_ACCOUNTS !== 'false';
+function configuredPublicOrigin(value) {
+  const source = String(value || '').trim();
+  if (!source) return null;
+  try {
+    const url = new URL(source);
+    if (url.protocol !== 'https:' || url.username || url.password || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash) return null;
+    return url;
+  } catch { return null; }
+}
+const publicOrigin = configuredPublicOrigin(process.env.APP_PUBLIC_URL);
+if (isProduction && !publicOrigin) console.warn('APP_PUBLIC_URL must be a valid HTTPS public origin; public pages remain noindex until it is configured.');
+function requestHost(request) {
+  const raw = String(request.headers.host || '').trim();
+  try { return new URL(`http://${raw}`).host.toLowerCase(); }
+  catch { return ''; }
+}
+function searchIndexingAllowed(request) {
+  // Local development is never crawled. In production, only the owner-set
+  // HTTPS public hostname may be indexed; Render and preview hostnames cannot.
+  return !isProduction || Boolean(publicOrigin && requestHost(request) === publicOrigin.host.toLowerCase());
+}
+function isPrivateSearchPath(pathname) {
+  return /^\/(?:api|admin|dashboard|student-app|student-desk|active-student-dashboard|pending-admission-dashboard|batch-hub|teacher-portal|login|auth|checkout|payment-pending|admission-intake|admission-wizard|application-wizard|accept-invite|live-classes|homework|resource-checkout)(?:[/.]|$)/.test(pathname);
+}
+const stateStoreConfig = resolveStateStoreConfig({ isProduction, localFilePath: stateFile });
+const stateStore = await createStateStore(stateStoreConfig);
+// A Render or similar ephemeral filesystem must never become the source of
+// truth for admissions, credentials, payments, or document metadata. Public
+// pages can remain readable while the operator completes the database setup.
+const durableStateRequired = isProduction;
+const durableFileStorage = ['supabase', 's3'].includes(String(process.env.STORAGE_DRIVER || 'local').trim().toLowerCase());
+const productionWritesReady = !durableStateRequired || (stateStore.durable && durableFileStorage);
 const devKey = createHash('sha256').update('nios-best-academy-development-key-only').digest('hex');
 const encryptionKeyHex = process.env.APP_ENCRYPTION_KEY || (isProduction ? '' : devKey);
 if (!/^[a-f0-9]{64}$/i.test(encryptionKeyHex)) throw new Error('APP_ENCRYPTION_KEY must be 64 hexadecimal characters in production.');
@@ -41,7 +74,6 @@ const defaultTeacherPermissions = () => ({ manageLiveClasses: false, manageHomew
 
 function now() { return new Date().toISOString(); }
 function uid(prefix) { return `${prefix}_${randomBytes(9).toString('hex')}`; }
-function json(value) { return JSON.stringify(value, null, 2); }
 function isSafeString(value, max = 160) { return typeof value === 'string' && value.trim().length > 0 && value.length <= max; }
 function indianDateParts(value = new Date()) { const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }); return Object.fromEntries(formatter.formatToParts(value).filter(part => part.type !== 'literal').map(part => [part.type, Number(part.value)])); }
 function localDate(year, month, day) { return new Date(Date.UTC(year, month - 1, day, 12, 0, 0)); }
@@ -103,13 +135,10 @@ function matchesPassword(password, stored) { const [salt, expected] = String(sto
 function b64(value) { return Buffer.from(value).toString('base64url'); }
 function issueSession(user) { const payload = b64(JSON.stringify({ sub: user.id, studentId: user.studentId || null, role: user.role, exp: Date.now() + 1000 * 60 * 60 * 12 })); const signature = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); return `${payload}.${signature}`; }
 function cookieValue(request, name) { const match = String(request.headers.cookie || '').split(';').map(item => item.trim()).find(item => item.startsWith(`${name}=`)); return match ? decodeURIComponent(match.slice(name.length + 1)) : ''; }
-function readSession(request) { const token = String(request.headers.authorization || '').replace(/^Bearer\s+/i, '') || cookieValue(request, 'nios_session'); const [payload, signature] = token.split('.'); if (!payload || !signature) return null; const expected = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null; try { const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return claims.exp > Date.now() ? claims : null; } catch { return null; } }
+function readSession(request) { const bearer = isProduction ? '' : String(request.headers.authorization || '').replace(/^Bearer\s+/i, ''); const token = cookieValue(request, 'nios_session') || bearer; const [payload, signature] = token.split('.'); if (!payload || !signature) return null; const expected = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null; try { const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return claims.exp > Date.now() ? claims : null; } catch { return null; } }
 
-async function ensureState() {
-  await mkdir(filesDir, { recursive: true });
-  try { await readFile(stateFile, 'utf8'); }
-  catch {
-    const data = {
+function initialState() {
+  return {
       users: demosEnabled ? [{ id: 'user_demo_aarav', studentId: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', passwordHash: hashPassword('student123'), role: 'student', createdAt: now() }, { id: 'user_admin', name: 'Academy Admin', email: 'admin@niosbest.in', passwordHash: hashPassword('admin123'), role: 'admin', createdAt: now() }, { id: 'user_teacher_science', name: 'Dr. Meera Iyer', email: 'teacher@niosbest.in', passwordHash: hashPassword('teacher123'), role: 'teacher', createdAt: now() }] : [],
       students: demosEnabled ? [{ id: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', phone: '+919999999999', board: 'NIOS', boardCode: 'NIOS', classLevel: '12', referenceNumber: 'RF-26-0920-184', subjects: [{ code: '302', name: 'English', tmaStatus: 'Submitted', practicalGuide: false, progress: 78 }, { code: '311', name: 'Mathematics', tmaStatus: 'In progress', practicalGuide: false, progress: 62 }, { code: '312', name: 'Physics', tmaStatus: 'Draft due', practicalGuide: true, progress: 54 }, { code: '313', name: 'Chemistry', tmaStatus: 'Pending', practicalGuide: true, progress: 41 }, { code: '314', name: 'Biology', tmaStatus: 'Pending', practicalGuide: true, progress: 36 }], createdAt: now() }] : [],
       vault: demosEnabled ? { 'demo-aarav': encrypt({ enrollmentNumber: '123456789012', referenceNumber: 'RF-26-0920-184', dateOfBirth: '2007-08-14', boardCode: 'NIOS', consent: true, consentedAt: now() }) } : {}, vaultRecovery: {},
@@ -119,9 +148,13 @@ async function ensureState() {
         { id: 'doc_tma_demo', studentId: 'demo-aarav', type: 'tmaReceipt', title: 'TMA receipt', status: 'Pending', source: 'mock', fileName: null, storageKey: null, issuedAt: null, updatedAt: now() }
       ] : [],
       jobs: [], syncLogs: [], audit: [], resources: [], notifications: [], enquiries: [], batches: seedBatches(), payments: [], enrollments: demosEnabled ? [{ id: 'enrol_demo_science', studentId: 'demo-aarav', batchId: 'batch_class12_stream1', streamId: 'science', board: 'NIOS', classLevel: '12', stream: 'Science', selectedSubjects: [{ code: '302', name: 'English' }, { code: '311', name: 'Mathematics' }, { code: '312', name: 'Physics' }, { code: '313', name: 'Chemistry' }, { code: '314', name: 'Biology' }], status: 'ACTIVE', activatedAt: now() }] : [], liveClasses: [], attendance: [], homework: [], submissions: [], materials: [], admissionDocuments: []
-    };
-    await writeFile(stateFile, json(data), 'utf8');
-  }
+  };
+}
+async function ensureState() {
+  // The directory is used only by the local document-storage adapter. It is
+  // harmless in Supabase mode and avoids a surprising local-development break.
+  await mkdir(filesDir, { recursive: true });
+  await stateStore.ensure(initialState());
 }
 await ensureState();
 await updateState(state => {
@@ -176,9 +209,9 @@ await updateState(state => {
   }
   for (const student of state.students) { if (!student.boardCode) student.boardCode = student.board || 'NIOS'; if (!Array.isArray(student.subjects)) student.subjects = []; }
 });
-async function readState() { return JSON.parse(await readFile(stateFile, 'utf8')); }
-async function writeState(data) { const temporary = `${stateFile}.${process.pid}.tmp`; await writeFile(temporary, json(data), 'utf8'); await rename(temporary, stateFile); }
-async function updateState(mutator) { const state = await readState(); const result = await mutator(state); await writeState(state); return result; }
+async function readState() { return stateStore.read(); }
+async function writeState(data) { return stateStore.write(data); }
+async function updateState(mutator) { return stateStore.update(mutator); }
 
 const sseClients = new Map();
 async function forwardWebhook(event) {
@@ -260,10 +293,12 @@ function publicAdmissionDocument(document) { const { storageKey, ...safe } = doc
 async function sendAdmissionIntakeNotice(state, enrollment) {
   const student = state.students.find(item => item.id === enrollment.studentId), application = { enrollmentId: enrollment.id, assignedBatchCode: enrollment.assignedBatchCode, status: enrollment.status, student: student ? { id: student.id, name: student.name, email: student.email, phone: student.phone } : null, selectedSubjects: enrollment.selectedSubjects || [], documentTypes: state.admissionDocuments.filter(item => item.enrollmentId === enrollment.id).map(item => item.type) };
   const publicUrl = String(process.env.APP_PUBLIC_URL || '').replace(/\/$/, ''), documentLinks = state.admissionDocuments.filter(item => item.enrollmentId === enrollment.id).map(item => `${item.label}: ${publicUrl ? `${publicUrl}/api/admin/admission-documents/${item.id}/download` : `Admin portal → application ${enrollment.id}`}`).join('\n'), text = `New paid-gated admission application\n\nStudent: ${student?.name || 'Student'}\nEmail: ${student?.email || '—'}\nPhone: ${student?.phone || '—'}\nBatch: ${application.assignedBatchCode}\nSubjects: ${(application.selectedSubjects || []).map(item => `${item.code} ${item.name}`).join(', ')}\n\nProtected documents:\n${documentLinks}\n\nOpen the authenticated admin portal to review/download files.`;
+  const attemptedAt = now(), provider = process.env.RESEND_API_KEY && process.env.ADMIN_ADMISSION_EMAIL ? 'resend' : process.env.ADMISSION_INTAKE_WEBHOOK_URL ? 'webhook' : 'academy-review-queue';
   try {
-    if (process.env.RESEND_API_KEY && process.env.ADMIN_ADMISSION_EMAIL) { const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM || 'Admissions <onboarding@resend.dev>', to: [process.env.ADMIN_ADMISSION_EMAIL], subject: `New NIOS application — ${student?.name || enrollment.id}`, text }), signal: AbortSignal.timeout(12_000) }); if (!response.ok) throw new Error(`Admin email delivery failed: ${response.status}`); return; }
-    if (process.env.ADMISSION_INTAKE_WEBHOOK_URL) await fetch(process.env.ADMISSION_INTAKE_WEBHOOK_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'admission.submitted', at: now(), application, text }), signal: AbortSignal.timeout(8_000) });
-  } catch (error) { console.warn('Admission intake notification failed:', error.message); }
+    if (provider === 'resend') { const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM || 'Admissions <onboarding@resend.dev>', to: [process.env.ADMIN_ADMISSION_EMAIL], subject: `New NIOS application — ${student?.name || enrollment.id}`, text }), signal: AbortSignal.timeout(12_000) }); if (!response.ok) throw new Error(`Admin email delivery failed: ${response.status}`); return { status: 'sent', provider, attemptedAt, error: null }; }
+    if (provider === 'webhook') { const response = await fetch(process.env.ADMISSION_INTAKE_WEBHOOK_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'admission.submitted', at: attemptedAt, application, text }), signal: AbortSignal.timeout(8_000) }); if (!response.ok) throw new Error(`Intake webhook delivery failed: ${response.status}`); return { status: 'sent', provider, attemptedAt, error: null }; }
+    return { status: 'queued', provider, attemptedAt, error: null };
+  } catch (error) { const message = String(error.message || 'Notification delivery failed.').slice(0, 300); console.warn('Admission intake notification failed:', message); return { status: 'failed', provider, attemptedAt, error: message }; }
 }
 async function sendEnquiryNotice(enquiry) {
   if (!process.env.RESEND_API_KEY || !process.env.ADMIN_ADMISSION_EMAIL) return 'queued';
@@ -352,8 +387,10 @@ async function zoomAccessToken() {
   return zoomToken.value;
 }
 async function createZoomMeeting({ title, startsAt, durationMinutes }) {
+  const hostUserId = String(process.env.ZOOM_HOST_USER_ID || '').trim();
+  if (!isSafeString(hostUserId, 254)) throw Object.assign(new Error('Zoom is connected, but the server-only ZOOM_HOST_USER_ID (the licensed host email or user ID) is missing. Paste an HTTPS meeting link or ask an administrator to finish Zoom setup.'), { status: 503 });
   const token = await zoomAccessToken();
-  const response = await fetch('https://api.zoom.us/v2/users/me/meetings', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ topic: title, type: 2, start_time: startsAt, duration: durationMinutes, timezone: process.env.ZOOM_TIMEZONE || 'Asia/Kolkata', settings: { waiting_room: true, join_before_host: false } }), signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(`https://api.zoom.us/v2/users/${encodeURIComponent(hostUserId)}/meetings`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ topic: title, type: 2, start_time: startsAt, duration: durationMinutes, timezone: process.env.ZOOM_TIMEZONE || 'Asia/Kolkata', settings: { waiting_room: true, join_before_host: false } }), signal: AbortSignal.timeout(15_000) });
   const meeting = await response.json().catch(() => ({}));
   if (!response.ok || !/^https:\/\//.test(meeting.join_url || '')) throw Object.assign(new Error('Zoom could not create this meeting. Use a valid HTTPS meeting link or verify Zoom app permissions.'), { status: 502 });
   return { liveUrl: meeting.join_url, hostUrl: /^https:\/\//.test(meeting.start_url || '') ? meeting.start_url : null, meetingProvider: 'zoom' };
@@ -472,6 +509,56 @@ async function body(request) {
   const raw = await rawBody(request);
   if (!raw.length) return {}; try { return JSON.parse(raw.toString('utf8')); } catch { throw new Error('Invalid JSON request body.'); }
 }
+// A small process-local throttle is deliberately conservative: it protects
+// password hashing from basic brute force without making a durable lockout
+// decision. A dedicated edge rate limiter should supplement this in production.
+const authAttempts = new Map();
+const authThrottleWindowMs = 15 * 60_000;
+function throttleFingerprint(value) { return createHash('sha256').update(String(value || '').trim().toLowerCase()).digest('hex').slice(0, 24); }
+function authThrottleKey(request, scope, identity) {
+  const forwarded = String(request.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const remote = forwarded || request.socket.remoteAddress || 'unknown';
+  return `${scope}:${throttleFingerprint(remote)}:${throttleFingerprint(identity)}`;
+}
+function enforceAuthThrottle(request, scope, identity, limit) {
+  const timestamp = Date.now();
+  for (const [key, entry] of authAttempts) if (timestamp - entry.startedAt > authThrottleWindowMs) authAttempts.delete(key);
+  const key = authThrottleKey(request, scope, identity), entry = authAttempts.get(key) || { startedAt: timestamp, attempts: 0 };
+  if (entry.attempts >= limit) {
+    const retryAfter = Math.max(1, Math.ceil((entry.startedAt + authThrottleWindowMs - timestamp) / 1000));
+    throw Object.assign(new Error('Too many attempts. Please wait before trying again.'), { status: 429, retryAfter });
+  }
+  entry.attempts += 1;
+  authAttempts.set(key, entry);
+  return key;
+}
+function clearAuthThrottle(key) { if (key) authAttempts.delete(key); }
+function detectedUploadMime(bytes) {
+  if (bytes.length >= 5 && bytes.subarray(0, 5).toString('ascii') === '%PDF-') return 'application/pdf';
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
+  if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (bytes.length >= 12 && bytes.subarray(0, 4).toString('ascii') === 'RIFF' && bytes.subarray(8, 12).toString('ascii') === 'WEBP') return 'image/webp';
+  return '';
+}
+function integrationReadiness(state) {
+  const storageDriver = String(process.env.STORAGE_DRIVER || 'local').trim().toLowerCase();
+  const paymentProvider = String(process.env.PAYMENT_PROVIDER || 'mock').trim().toLowerCase();
+  const notificationProvider = String(process.env.NOTIFICATION_PROVIDER || 'mock').trim().toLowerCase();
+  const configured = names => names.filter(name => !String(process.env[name] || '').trim());
+  const latestDelivery = [...(state.enrollments || [])].filter(item => item.intakeNotice?.attemptedAt).sort((a, b) => String(b.intakeNotice.attemptedAt).localeCompare(String(a.intakeNotice.attemptedAt)))[0]?.intakeNotice || null;
+  const storageRequirements = storageDriver === 'supabase' ? ['SUPABASE_URL', 'SUPABASE_BUCKET', 'SUPABASE_SERVICE_ROLE_KEY'] : storageDriver === 's3' ? ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] : [];
+  const paymentRequirements = paymentProvider === 'razorpay' ? ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'] : [];
+  const emailRequirements = notificationProvider === 'resend-email' ? ['RESEND_API_KEY', 'ADMISSION_EMAIL_FROM'] : [];
+  const niosMode = String(process.env.NIOS_SYNC_MODE || 'manual').trim().toLowerCase();
+  const niosRequirements = niosMode === 'official' ? ['OFFICIAL_NIOS_CONNECTOR_URL', 'OFFICIAL_NIOS_CONNECTOR_TOKEN'] : [];
+  return {
+    persistence: { ready: stateStore.durable && ['supabase', 's3'].includes(storageDriver), store: stateStore.publicStatus(), storageDriver },
+    payments: { provider: paymentProvider, ready: paymentProvider === 'razorpay' && configured(paymentRequirements).length === 0, missing: configured(paymentRequirements) },
+    email: { provider: notificationProvider, ready: notificationProvider === 'resend-email' && configured(emailRequirements).length === 0, missing: configured(emailRequirements), latestIntakeDelivery: latestDelivery ? { status: latestDelivery.status, provider: latestDelivery.provider, attemptedAt: latestDelivery.attemptedAt, error: latestDelivery.error || null } : null },
+    zoom: { ready: configured(['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_HOST_USER_ID']).length === 0, missing: configured(['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_HOST_USER_ID']) },
+    nios: { mode: niosMode, ready: niosMode === 'manual' || configured(niosRequirements).length === 0, missing: configured(niosRequirements) }
+  };
+}
 function requireAdmin(request) {
   const session = readSession(request);
   if (session?.role === 'admin') return session;
@@ -545,11 +632,12 @@ function studentSubjectsForEnrollment(student, enrollment, state) {
   });
 }
 function forEnrollment(item, enrollment, state) { const batch = state?.batches?.find(record => record.id === enrollment.batchId); const inBatch = batch && item.batchId === enrollment.batchId && item.board === enrollment.board && item.classLevel === enrollment.classLevel && item.stream === enrollment.stream; const selected = Array.isArray(enrollment.selectedSubjects) ? enrollment.selectedSubjects : []; const batchAllowsSubject = Boolean(batch?.subjects?.some(subject => String(subject.code) === String(item.subjectCode) && String(subject.name) === String(item.subject))); return !item.restricted && inBatch && batchAllowsSubject && selected.some(subject => String(subject.code) === String(item.subjectCode) && String(subject.name) === String(item.subject)); }
-function publicEnrollment(enrollment, state) { const batch = state.batches.find(item => item.id === enrollment.batchId); return { ...enrollment, batch: batch ? { id: batch.id, name: batch.name, stream: batch.stream, streamId: batch.streamId } : null, contentAccess: enrollment.status === 'ACTIVE' }; }
+function publicEnrollment(enrollment, state) { const { applicantDateOfBirth, guardianConfirmation, guardianConfirmedAt, guardianName, guardianEmail, guardianPhone, intakeNotice, ...safe } = enrollment; const batch = state.batches.find(item => item.id === enrollment.batchId); return { ...safe, batch: batch ? { id: batch.id, name: batch.name, stream: batch.stream, streamId: batch.streamId } : null, contentAccess: enrollment.status === 'ACTIVE' }; }
 function filePayload(input, maxBytes = 6 * 1024 * 1024) {
   const fileName = String(input.fileName || '').trim(), mimeType = String(input.mimeType || '').trim(), base64 = String(input.base64 || '').replace(/^data:[^;]+;base64,/, '');
-  if (!isSafeString(fileName, 140) || !['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || !/^[A-Za-z0-9+/=]+$/.test(base64)) throw Object.assign(new Error('Provide a PDF, JPG, PNG, or WEBP file.'), { status: 422 });
+  if (!isSafeString(fileName, 140) || !['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) throw Object.assign(new Error('Provide a PDF, JPG, PNG, or WEBP file.'), { status: 422 });
   const bytes = Buffer.from(base64, 'base64'); if (!bytes.length || bytes.length > maxBytes) throw Object.assign(new Error(`File must be smaller than ${Math.floor(maxBytes / 1024 / 1024)} MB.`), { status: 422 });
+  if (detectedUploadMime(bytes) !== mimeType) throw Object.assign(new Error('The file contents do not match the selected file type.'), { status: 422 });
   return { fileName: fileName.replace(/[^a-zA-Z0-9._ -]/g, '_'), mimeType, bytes };
 }
 function publicUser(user) { return { id: user.id, studentId: user.studentId || null, name: user.name, email: user.email, role: user.role, superAdmin: Boolean(user.superAdmin), permissions: user.role === 'teacher' ? user.permissions || defaultTeacherPermissions() : undefined }; }
@@ -710,6 +798,13 @@ const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 async function serveStatic(pathname, response, request) {
   // Never expose backend configuration, state, credentials or QA artifacts.
   if (pathname.includes('\\') || pathname.split('/').some(part => part.startsWith('.')) || pathname.startsWith('/portal-service/')) return send(response, 404, { error: 'Not found' });
+  // Do not let the Render service hostname publish a competing sitemap or
+  // invite crawlers before the real HTTPS domain is connected and configured.
+  if (!searchIndexingAllowed(request) && pathname === '/robots.txt') {
+    response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow, noarchive' });
+    return response.end('User-agent: *\nDisallow: /\n');
+  }
+  if (!searchIndexingAllowed(request) && pathname === '/sitemap.xml') return send(response, 404, { error: 'Not found' });
   // Keep the legacy direct URL on the same clear owner-only staff experience.
   if (pathname === '/admin/staff' || pathname === '/admin-staff.html') pathname = '/admin-staff-v2.html';
   const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
@@ -747,16 +842,21 @@ async function serveStatic(pathname, response, request) {
     // Assets use readable, non-hashed filenames. Revalidate app code on every
     // visit so a deployed UI/security fix is not hidden behind a one-hour cache.
     const extension = extname(file).toLowerCase(), isAppShell = ['.html', '.webmanifest', '.js', '.css'].includes(extension) || requested.endsWith('-sw.js');
-    const etag = `W/"${details.size}-${Math.trunc(details.mtimeMs)}"`;
+    const seoDocument = extension === '.html' || requested === '/robots.txt' || requested === '/sitemap.xml' || requested === '/seo-site.js';
+    const publicOriginTag = publicOrigin?.origin || 'unconfigured-public-origin';
+    const etag = `W/"${details.size}-${Math.trunc(details.mtimeMs)}-${createHash('sha256').update(publicOriginTag).digest('hex').slice(0, 12)}"`;
     const headers = {
       'content-type': mime[extension] || 'application/octet-stream',
       'x-content-type-options': 'nosniff',
       etag,
-      'cache-control': (protectedDesk || protectedAdmin || protectedTeacher) ? 'private, no-store' : (isAppShell ? 'no-cache' : 'public, max-age=3600, stale-while-revalidate=86400'),
+      'cache-control': (protectedDesk || protectedAdmin || protectedTeacher) ? 'private, no-store' : ((isAppShell || seoDocument) ? 'no-cache' : 'public, max-age=3600, stale-while-revalidate=86400'),
       ...((protectedDesk || protectedAdmin || protectedTeacher) ? { vary: 'Cookie' } : {})
     };
     if (request.headers['if-none-match'] === etag) { response.writeHead(304, headers); return response.end(); }
     let content = await readFile(file);
+    if (publicOrigin && ['.html', '.xml', '.txt', '.js'].includes(extension)) {
+      content = Buffer.from(content.toString('utf8').replaceAll('https://niosbest.in', publicOrigin.origin), 'utf8');
+    }
     if (sessionBootstrapRole && extension === '.html') {
       const bootstrap = `<script>try{if(!sessionStorage.getItem('niosSession'))sessionStorage.setItem('niosSession',JSON.stringify({id:'cookie-session',role:'${sessionBootstrapRole}'}));}catch{}</script>`;
       content = Buffer.from(content.toString('utf8').replace('</head>', `${bootstrap}</head>`), 'utf8');
@@ -775,7 +875,21 @@ const server = createServer(async (request, response) => {
     response.setHeader('x-frame-options', 'DENY');
     response.setHeader('content-security-policy', "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self' https://api.razorpay.com; script-src 'self' 'unsafe-inline' https://checkout.razorpay.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' https://*.supabase.co https://api.razorpay.com; frame-src https://api.razorpay.com https://checkout.razorpay.com; upgrade-insecure-requests");
     if (isProduction) response.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains; preload');
-    if (/^\/(?:api|admin|dashboard|teacher-portal|login|auth|checkout|payment-pending|admission-intake|accept-invite|live-classes|homework)(?:\/|\.|$)/.test(path)) response.setHeader('x-robots-tag', 'noindex, nofollow, noarchive');
+    if (isPrivateSearchPath(path) || !searchIndexingAllowed(request)) response.setHeader('x-robots-tag', 'noindex, nofollow, noarchive');
+    // Do not let an ephemeral filesystem collect student identities, files,
+    // payment state, or staff changes in production. Read-only public pages
+    // remain available with an actionable response while Supabase is set up.
+    const mutatingApiRequest = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && path.startsWith('/api/');
+    const safeWithoutDurableState = new Set(['/api/auth/login', '/api/auth/logout', '/api/counselor']);
+    if (mutatingApiRequest && !productionWritesReady && !safeWithoutDurableState.has(path)) {
+      return send(response, 503, {
+        error: 'Admissions, document uploads, payments, and portal changes are temporarily unavailable while durable database storage is configured.',
+        code: 'DURABLE_STATE_REQUIRED',
+        stateStore: stateStore.publicStatus(),
+        storageDriver: String(process.env.STORAGE_DRIVER || 'local'),
+        setup: 'Apply the portal-state migration and set PORTAL_STATE_DRIVER=supabase with the server-only Supabase variables.'
+      });
+    }
     if (path === '/api/counselor' && method === 'POST') {
       const session = readSession(request);
       if (!session?.studentId) return send(response, 401, {error:'Sign in with your student account to use the assistant.'});
@@ -787,11 +901,21 @@ const server = createServer(async (request, response) => {
       return send(response, 200, counselorReply(input.message, {enrollment,subjects:student.subjects||[]}, String(input.topic||'')));
     }
     if (await resourceStore(request,response,url,{readState,updateState,readSession,requireAdmin,body,send,storage,filePayload,uid,isProduction})) return;
-    if (method === 'GET' && path === '/api/health') return send(response, 200, { ok: true, mode: process.env.NIOS_SYNC_MODE || 'mock', storage: process.env.STORAGE_DRIVER || 'local', notificationProvider: process.env.NOTIFICATION_PROVIDER || 'mock', at: now() });
+    if (method === 'GET' && path === '/api/health') return send(response, 200, {
+      ok: true,
+      readyForWrites: productionWritesReady,
+      mode: process.env.NIOS_SYNC_MODE || 'mock',
+      storage: process.env.STORAGE_DRIVER || 'local',
+      notificationProvider: process.env.NOTIFICATION_PROVIDER || 'mock',
+      stateStore: stateStore.publicStatus(),
+      durableFileStorage,
+      at: now()
+    });
     if (method === 'GET' && path === '/api/admission-cycle') { const route = String(url.searchParams.get('route') || 'stream1'); return send(response, 200, admissionCycle(route)); }
     if (method === 'GET' && path === '/api/batches') { const state = await readState(); return send(response, 200, state.batches.filter(batch => { const cycle = batch.board === 'NIOS' ? admissionCycle(batchAdmissionRoute(batch)) : { isOpen: true, route: 'always' }; return batch.published !== false && cycle.isOpen; }).map(batch => { const cycle = batch.board === 'NIOS' ? admissionCycle(batchAdmissionRoute(batch)) : { isOpen: true, route: 'always', lateFee: false }; return { ...batch, admission: cycle, assignedBatchCode: batch.board === 'NIOS' ? assignedBatchCode(batch, cycle) : `BATCH-${batch.id.toUpperCase()}` }; })); }
     if (method === 'POST' && path === '/api/auth/register') {
       const input = await body(request), name = String(input.name || '').trim(), email = String(input.email || '').trim().toLowerCase(), password = String(input.password || ''), phone = String(input.phone || '').trim();
+      const throttleKey = enforceAuthThrottle(request, 'register', email || phone || 'unknown', 6);
       if (!isSafeString(name, 80) || !/^\S+@\S+\.\S+$/.test(email) || password.length < 8 || !isSafeString(phone, 30)) return send(response, 422, { error: 'Name, valid email, mobile number, and an 8-character password are required.' });
       const user = await updateState(state => {
         if (state.users.some(item => item.email === email)) throw Object.assign(new Error('An account with this email already exists.'), { status: 409 });
@@ -803,17 +927,20 @@ const server = createServer(async (request, response) => {
         return created;
       });
       const session = sessionHeaders(user);
-      return send(response, 201, { user: publicUser(user), token: session.token }, session.headers);
+      clearAuthThrottle(throttleKey);
+      return send(response, 201, { user: publicUser(user), ...(isProduction ? {} : { token: session.token }) }, session.headers);
     }
     if (method === 'POST' && path === '/api/auth/login') {
       const input = await body(request), email = String(input.email || '').trim().toLowerCase(), password = String(input.password || '');
+      const throttleKey = enforceAuthThrottle(request, 'login', email || 'unknown', 8);
       const state = await readState(), user = state.users.find(item => item.email === email);
       if (!user || !matchesPassword(password, user.passwordHash)) return send(response, 401, { error: 'We could not match those sign-in details.' });
       const session = sessionHeaders(user);
-      return send(response, 200, { user: publicUser(user), token: session.token }, session.headers);
+      clearAuthThrottle(throttleKey);
+      return send(response, 200, { user: publicUser(user), ...(isProduction ? {} : { token: session.token }) }, session.headers);
     }
     if (method === 'POST' && path === '/api/auth/logout') return send(response, 200, { ok: true }, { 'set-cookie': `nios_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${isProduction ? '; Secure' : ''}` });
-    if (method === 'POST' && path === '/api/auth/accept-invite') { const input = await body(request), token = String(input.token || ''), password = String(input.password || ''); if (token.length < 32 || password.length < 12) return send(response, 422, { error: 'Use a valid invitation and a password of at least 12 characters.' }); const tokenHash = createHash('sha256').update(token).digest('hex'); const accepted = await updateState(state => { const user = state.users.find(item => item.inviteTokenHash === tokenHash && Date.parse(item.inviteExpiresAt || '') > Date.now()); if (!user) throw Object.assign(new Error('This invitation is invalid or expired.'), { status: 410 }); user.passwordHash = hashPassword(password); user.requiresPasswordSetup = false; delete user.inviteTokenHash; delete user.inviteExpiresAt; user.passwordSetAt = now(); state.audit.push({ id: uid('audit'), at: now(), action: 'staff.invite-accepted', staffId: user.id, role: user.role }); return user; }); return send(response, 200, { user: publicUser(accepted) }); }
+    if (method === 'POST' && path === '/api/auth/accept-invite') { const input = await body(request), token = String(input.token || ''), password = String(input.password || ''), throttleKey = enforceAuthThrottle(request, 'accept-invite', token || 'unknown', 8); if (token.length < 32 || password.length < 12) return send(response, 422, { error: 'Use a valid invitation and a password of at least 12 characters.' }); const tokenHash = createHash('sha256').update(token).digest('hex'); const accepted = await updateState(state => { const user = state.users.find(item => item.inviteTokenHash === tokenHash && Date.parse(item.inviteExpiresAt || '') > Date.now()); if (!user) throw Object.assign(new Error('This invitation is invalid or expired.'), { status: 410 }); user.passwordHash = hashPassword(password); user.requiresPasswordSetup = false; delete user.inviteTokenHash; delete user.inviteExpiresAt; user.passwordSetAt = now(); state.audit.push({ id: uid('audit'), at: now(), action: 'staff.invite-accepted', staffId: user.id, role: user.role }); return user; }); clearAuthThrottle(throttleKey); return send(response, 200, { user: publicUser(accepted) }); }
     if (method === 'GET' && path === '/api/auth/me') { const session = readSession(request); if (!session) return send(response, 401, { error: 'Sign-in is required.' }); const state = await readState(), user = state.users.find(item => item.id === session.sub); if (!user) return send(response, 401, { error: 'Account not found.' }); const student = user.studentId ? state.students.find(item => item.id === user.studentId) : null; return send(response, 200, { user: publicUser(user), profile: student ? publicStudent(student, state) : null }); }
     if (method === 'POST' && path === '/api/enquiries') {
       const input = await body(request), name = String(input.name || '').trim(), email = String(input.email || '').trim().toLowerCase(), phone = String(input.phone || '').trim(), topic = String(input.topic || '').trim(), message = String(input.message || '').trim();
@@ -830,7 +957,15 @@ const server = createServer(async (request, response) => {
       if (!supplied || supplied.length !== expected.length || !timingSafeEqual(Buffer.from(supplied), Buffer.from(expected))) return send(response, 401, { error: 'Invalid Razorpay webhook signature.' });
       let event; try { event = JSON.parse(raw.toString('utf8')); } catch { return send(response, 400, { error: 'Invalid Razorpay webhook payload.' }); }
       if (event.event !== 'payment.captured') return send(response, 200, { ok: true, ignored: event.event || 'unknown' });
-      const capture = event.payload?.payment?.entity || {}, paymentId = String(capture.notes?.academyPaymentId || '');
+      const capture = event.payload?.payment?.entity || {}, resourceOrderId = String(capture.notes?.academyResourceOrderId || '');
+      // Resource purchases share the signed Razorpay webhook with batch purchases.
+      // The local resource order remains the source of truth for product, amount,
+      // currency and owner; the Razorpay note is only an opaque correlation ID.
+      if (resourceOrderId) {
+        const captured = await updateState(data => captureResourceOrder(data, capture));
+        return send(response, 200, { ok: true, resourceOrderId: captured.order.id, activated: !captured.duplicate });
+      }
+      const paymentId = String(capture.notes?.academyPaymentId || '');
       if (!paymentId) return send(response, 422, { error: 'The payment is missing its academy payment reference.' });
       const activated = await updateState(data => {
         const payment = data.payments.find(item => item.id === paymentId && item.provider === 'razorpay');
@@ -838,7 +973,10 @@ const server = createServer(async (request, response) => {
         if (!payment.providerOrderId || capture.order_id !== payment.providerOrderId) throw Object.assign(new Error('Payment order mismatch.'), { status: 409 });
         if (capture.status !== 'captured' || Number(capture.amount) !== Number(payment.amount) || String(capture.currency || '').toUpperCase() !== String(payment.currency || '').toUpperCase()) throw Object.assign(new Error('Captured payment amount or currency does not match this order.'), { status: 409 });
         if (!capture.id) throw Object.assign(new Error('The capture is missing its Razorpay payment reference.'), { status: 422 });
-        if (payment.status === 'CAPTURED') return { payment, enrollment: paidEnrollment(data, payment.studentId), duplicate: true };
+        if (payment.status === 'CAPTURED') {
+          if (payment.providerReference && payment.providerReference !== capture.id) throw Object.assign(new Error('A different Razorpay payment was already recorded for this order.'), { status: 409 });
+          return { payment, enrollment: paidEnrollment(data, payment.studentId), duplicate: true };
+        }
         return { payment, enrollment: activateEnrollment(data, payment, capture.id), duplicate: false };
       });
       const state = await readState(), student = state.students.find(item => item.id === activated.payment.studentId);
@@ -860,11 +998,12 @@ const server = createServer(async (request, response) => {
     if (method === 'GET' && path === '/api/admission/intake') {
       const state = await readState(), access = requireApplicationEnrollment(request, state, String(url.searchParams.get('batchId') || '')), student = state.students.find(item => item.id === access.session.studentId);
       const batch = state.batches.find(item => item.id === access.enrollment.batchId);
-      return send(response, 200, { profile: publicStudent(student, state), enrollment: publicEnrollment(access.enrollment, state), subjectOptions: admissionSubjectOptions(batch), requiredDocuments: requiredAdmissionDocuments, documents: state.admissionDocuments.filter(item => item.enrollmentId === access.enrollment.id).map(publicAdmissionDocument), syncMode: process.env.NIOS_SYNC_MODE || 'manual', canSubmit: (access.enrollment.selectedSubjects || []).length > 0 && requiredAdmissionDocuments.every(requirement => state.admissionDocuments.some(document => document.enrollmentId === access.enrollment.id && document.type === requirement.type)) });
+      const safeguards = admissionIntakeSafeguards(access.enrollment);
+      return send(response, 200, { profile: publicStudent(student, state), enrollment: publicEnrollment(access.enrollment, state), safeguards, subjectOptions: admissionSubjectOptions(batch), requiredDocuments: requiredAdmissionDocuments, documents: state.admissionDocuments.filter(item => item.enrollmentId === access.enrollment.id).map(publicAdmissionDocument), syncMode: process.env.NIOS_SYNC_MODE || 'manual', canSubmit: safeguards.ready && (access.enrollment.selectedSubjects || []).length > 0 && requiredAdmissionDocuments.every(requirement => state.admissionDocuments.some(document => document.enrollmentId === access.enrollment.id && document.type === requirement.type)) });
     }
     if (method === 'PUT' && path === '/api/admission/intake') {
       const state = await readState(), access = requireApplicationEnrollment(request, state), input = await body(request), batch = state.batches.find(item => item.id === access.enrollment.batchId), selectedSubjects = admissionSubjects(input.subjects, admissionSubjectOptions(batch));
-      const updated = await updateState(data => { const enrollment = data.enrollments.find(item => item.id === access.enrollment.id); if (!enrollment || ['DOCUMENTS_SUBMITTED_PENDING_PAYMENT', 'PAYMENT_CONFIRMED', 'VERIFICATION_IN_PROGRESS', 'ACTIVE'].includes(enrollment.status)) throw Object.assign(new Error('This admission application can no longer be changed.'), { status: 409 }); Object.assign(enrollment, { selectedSubjects, portalSyncConsent: Boolean(input.portalSyncConsent ?? enrollment.portalSyncConsent), status: data.admissionDocuments.some(item => item.enrollmentId === enrollment.id) ? 'DOCUMENTS_IN_PROGRESS' : 'SUBJECTS_SELECTED', updatedAt: now() }); const student = data.students.find(item => item.id === access.session.studentId); if (student) student.subjects = selectedSubjects.map(item => ({ ...item, tmaStatus: 'Pending', practicalGuide: false, progress: 0 })); data.audit.push({ id: uid('audit'), at: now(), action: 'admission.subjects-selected', enrollmentId: enrollment.id, studentId: access.session.studentId, portalSyncConsent: enrollment.portalSyncConsent }); return enrollment; });
+      const updated = await updateState(data => { const enrollment = data.enrollments.find(item => item.id === access.enrollment.id); if (!enrollment || ['DOCUMENTS_SUBMITTED_PENDING_PAYMENT', 'PAYMENT_CONFIRMED', 'VERIFICATION_IN_PROGRESS', 'ACTIVE'].includes(enrollment.status)) throw Object.assign(new Error('This admission application can no longer be changed.'), { status: 409 }); const safeguards = validateAdmissionIntakeSafeguards(input, enrollment); Object.assign(enrollment, { selectedSubjects, portalSyncConsent: Boolean(input.portalSyncConsent ?? enrollment.portalSyncConsent), ...safeguards, status: data.admissionDocuments.some(item => item.enrollmentId === enrollment.id) ? 'DOCUMENTS_IN_PROGRESS' : 'SUBJECTS_SELECTED', updatedAt: now() }); const student = data.students.find(item => item.id === access.session.studentId); if (student) student.subjects = selectedSubjects.map(item => ({ ...item, tmaStatus: 'Pending', practicalGuide: false, progress: 0 })); data.audit.push({ id: uid('audit'), at: now(), action: 'admission.subjects-selected', enrollmentId: enrollment.id, studentId: access.session.studentId, portalSyncConsent: enrollment.portalSyncConsent, applicantIsUnder18: Boolean(validDateOfBirth(enrollment.applicantDateOfBirth)?.age < 18) }); return enrollment; });
       emit(access.session.studentId, 'admission.subjects-selected', { enrollmentId: updated.id }); return send(response, 200, publicEnrollment(updated, await readState()));
     }
     if (method === 'POST' && path === '/api/admission/documents') {
@@ -877,8 +1016,10 @@ const server = createServer(async (request, response) => {
     if (method === 'POST' && path === '/api/admission/submit') {
       const state = await readState(), access = requireApplicationEnrollment(request, state), missing = requiredAdmissionDocuments.filter(requirement => !state.admissionDocuments.some(document => document.enrollmentId === access.enrollment.id && document.type === requirement.type));
       if (!(access.enrollment.selectedSubjects || []).length || missing.length) return send(response, 422, { error: `Choose subjects and upload: ${missing.map(item => item.label).join(', ') || 'at least one subject'}.` });
+      if (!admissionIntakeSafeguards(access.enrollment).ready) return send(response, 422, { error: 'Confirm the document-processing acknowledgement, enter the applicant date of birth, and complete guardian confirmation when required before submitting.' });
       const submitted = await updateState(data => { const enrollment = data.enrollments.find(item => item.id === access.enrollment.id); if (!enrollment || !['SUBJECTS_SELECTED', 'DOCUMENTS_IN_PROGRESS'].includes(enrollment.status)) throw Object.assign(new Error('This application cannot be submitted in its current state.'), { status: 409 }); Object.assign(enrollment, { status: 'DOCUMENTS_SUBMITTED_PENDING_PAYMENT', documentsSubmittedAt: now(), updatedAt: now() }); data.audit.push({ id: uid('audit'), at: now(), action: 'admission.documents-submitted', enrollmentId: enrollment.id, studentId: access.session.studentId }); return enrollment; });
-      const current = await readState(); await sendAdmissionIntakeNotice(current, submitted); emit(access.session.studentId, 'admission.submitted', { enrollmentId: submitted.id, status: submitted.status }); return send(response, 200, publicEnrollment(submitted, current));
+      const current = await readState(), delivery = await sendAdmissionIntakeNotice(current, submitted), finalized = await updateState(data => { const enrollment = data.enrollments.find(item => item.id === submitted.id); if (!enrollment) throw Object.assign(new Error('Admission application not found.'), { status: 404 }); enrollment.intakeNotice = delivery; enrollment.updatedAt = now(); data.audit.push({ id: uid('audit'), at: now(), action: `admission.intake-notice-${delivery.status}`, enrollmentId: enrollment.id, studentId: access.session.studentId, provider: delivery.provider, error: delivery.error || null }); return enrollment; });
+      const finalState = await readState(); emit(access.session.studentId, 'admission.submitted', { enrollmentId: submitted.id, status: submitted.status }); return send(response, 200, publicEnrollment(finalized, finalState));
     }
     const admissionDocumentMatch = path.match(/^\/api\/admission\/documents\/([^/]+)\/download$/);
     if (method === 'GET' && admissionDocumentMatch) { const state = await readState(), access = requireApplicationEnrollment(request, state), document = state.admissionDocuments.find(item => item.id === admissionDocumentMatch[1] && item.enrollmentId === access.enrollment.id); if (!document) return send(response, 404, { error: 'Admission document not found.' }); const stored = await storage.get(document.storageKey); response.writeHead(200, { 'content-type': document.mimeType, 'content-disposition': `attachment; filename="${document.fileName}"` }); return response.end(stored.bytes); }
@@ -888,12 +1029,29 @@ const server = createServer(async (request, response) => {
       const route = batch.board === 'NIOS' ? batchAdmissionRoute(batch) : 'always', cycle = batch.board === 'NIOS' ? admissionCycle(route) : { route: 'always', isOpen: true, target: 'Current admission', targetCode: 'CURRENT', lateFee: false };
       if (!cycle.isOpen) return send(response, 409, { error: cycle.message || 'This batch is not accepting admissions in the current NIOS window.' });
       const application = applicationEnrollment(state, session.studentId, batch.id); if (!application || application.status !== 'DOCUMENTS_SUBMITTED_PENDING_PAYMENT') return send(response, 409, { error: 'Complete your subject selection and document submission before opening payment.' });
-      const amount = Number(String(batch.price).replace(/[^0-9]/g, '')) * 100, provider = process.env.PAYMENT_PROVIDER || 'mock';
-      const payment = await updateState(data => { const created = { id: uid('payment'), studentId: session.studentId, batchId: batch.id, assignedBatchCode: batch.board === 'NIOS' ? assignedBatchCode(batch, cycle) : `BATCH-${batch.id.toUpperCase()}`, cycle, provider, amount, currency: 'INR', status: 'CREATED', createdAt: now() }; data.payments.push(created); data.audit.push({ id: uid('audit'), at: now(), action: 'payment.order-created', studentId: session.studentId, paymentId: created.id, batchId: batch.id, assignedBatchCode: created.assignedBatchCode }); return created; });
+      const amount = Number(String(batch.price).replace(/[^0-9]/g, '')) * 100, provider = String(process.env.PAYMENT_PROVIDER || 'mock').trim().toLowerCase();
+      if (!Number.isSafeInteger(amount) || amount < 100 || !['mock', 'razorpay'].includes(provider) || (isProduction && provider !== 'razorpay')) return send(response, 503, { error: 'Live Razorpay payments are not configured for this batch yet.' });
+      const paymentResult = await updateState(data => {
+        const existing = data.payments.find(item => item.studentId === session.studentId && item.batchId === batch.id && item.provider === provider && item.amount === amount && item.currency === 'INR' && item.status === 'CREATED' && (provider !== 'razorpay' || item.providerOrderId));
+        if (existing) return { payment: existing, reused: true };
+        const created = { id: uid('payment'), studentId: session.studentId, batchId: batch.id, assignedBatchCode: batch.board === 'NIOS' ? assignedBatchCode(batch, cycle) : `BATCH-${batch.id.toUpperCase()}`, cycle, provider, amount, currency: 'INR', status: 'CREATED', createdAt: now() }; data.payments.push(created); data.audit.push({ id: uid('audit'), at: now(), action: 'payment.order-created', studentId: session.studentId, paymentId: created.id, batchId: batch.id, assignedBatchCode: created.assignedBatchCode }); return { payment: created, reused: false };
+      });
+      const payment = paymentResult.payment;
+      if (paymentResult.reused) {
+        if (provider === 'razorpay') {
+          const keyId = process.env.RAZORPAY_KEY_ID, keySecret = process.env.RAZORPAY_KEY_SECRET; if (!keyId || !keySecret) return send(response, 503, { error: 'Razorpay is not configured.' });
+          return send(response, 200, { payment, checkout: { provider: 'razorpay', keyId, orderId: payment.providerOrderId, amount: payment.amount, currency: payment.currency }, reused: true });
+        }
+        return send(response, 200, { payment, checkout: { provider: 'mock', amount: payment.amount, currency: payment.currency }, reused: true });
+      }
       if (provider === 'razorpay') {
         const keyId = process.env.RAZORPAY_KEY_ID, keySecret = process.env.RAZORPAY_KEY_SECRET; if (!keyId || !keySecret) return send(response, 503, { error: 'Razorpay is not configured.' });
-        const upstream = await fetch('https://api.razorpay.com/v1/orders', { method: 'POST', headers: { authorization: `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`, 'content-type': 'application/json' }, body: JSON.stringify({ amount, currency: 'INR', receipt: payment.id, notes: { academyPaymentId: payment.id, studentId: session.studentId, batchId: batch.id } }), signal: AbortSignal.timeout(15_000) });
-        if (!upstream.ok) return send(response, 502, { error: `Razorpay order creation failed: ${upstream.status}` }); const order = await upstream.json(); await updateState(data => { const current = data.payments.find(item => item.id === payment.id); if (current) current.providerOrderId = order.id; }); return send(response, 201, { payment: { ...payment, providerOrderId: order.id }, checkout: { provider: 'razorpay', keyId, orderId: order.id, amount, currency: 'INR' } });
+        let upstream;
+        try { upstream = await fetch('https://api.razorpay.com/v1/orders', { method: 'POST', headers: { authorization: `Basic ${Buffer.from(`${keyId}:${keySecret}`).toString('base64')}`, 'content-type': 'application/json' }, body: JSON.stringify({ amount, currency: 'INR', receipt: payment.id, notes: { academyPaymentId: payment.id, studentId: session.studentId, batchId: batch.id } }), signal: AbortSignal.timeout(15_000) }); } catch { upstream = null; }
+        if (!upstream?.ok) { await updateState(data => { const current = data.payments.find(item => item.id === payment.id); if (current) { current.status = 'FAILED'; current.failureReason = 'provider-order-creation-failed'; current.updatedAt = now(); } }); return send(response, 502, { error: 'Razorpay order creation failed. No payment was captured.' }); }
+        const order = await upstream.json().catch(() => ({}));
+        if (!order.id) { await updateState(data => { const current = data.payments.find(item => item.id === payment.id); if (current) { current.status = 'FAILED'; current.failureReason = 'provider-order-id-missing'; current.updatedAt = now(); } }); return send(response, 502, { error: 'Razorpay did not return a payment order. No payment was captured.' }); }
+        await updateState(data => { const current = data.payments.find(item => item.id === payment.id); if (current) { current.providerOrderId = order.id; current.updatedAt = now(); } }); return send(response, 201, { payment: { ...payment, providerOrderId: order.id }, checkout: { provider: 'razorpay', keyId, orderId: order.id, amount, currency: 'INR' } });
       }
       return send(response, 201, { payment, checkout: { provider: 'mock', amount, currency: 'INR' } });
     }
@@ -1087,7 +1245,7 @@ const server = createServer(async (request, response) => {
     if (method === 'GET' && path === '/api/admin/materials') { requireAdmin(request); const state = await readState(); return send(response, 200, state.materials.map(({ storageKey, ...item }) => ({ ...item, batchName: state.batches.find(batch => batch.id === item.batchId)?.name || item.batchId, downloadable: Boolean(storageKey) }))); }
     const adminMaterialAccessMatch = path.match(/^\/api\/admin\/materials\/([^/]+)\/access$/);
     if (method === 'PUT' && adminMaterialAccessMatch) { const admin = requireAdmin(request), input = await body(request); const updated = await updateState(state => { const item = state.materials.find(record => record.id === adminMaterialAccessMatch[1]); if (!item) throw Object.assign(new Error('Batch material not found.'), { status: 404 }); item.restricted = Boolean(input.restricted); item.restrictionReason = item.restricted ? String(input.reason || 'Restricted by administrator').trim().slice(0, 300) : null; item.restrictedAt = item.restricted ? now() : null; item.restrictedBy = item.restricted ? admin.sub : null; state.audit.push({ id: uid('audit'), at: now(), action: item.restricted ? 'material.restricted' : 'material.restored', materialId: item.id, staffId: admin.sub }); return item; }); return send(response, 200, { ...updated, downloadable: Boolean(updated.storageKey) }); }
-    if (method === 'GET' && path === '/api/admin/admission-applications') { requireAdmin(request); const state = await readState(); return send(response, 200, state.enrollments.filter(item => ['DOCUMENTS_SUBMITTED_PENDING_PAYMENT', 'PAYMENT_CONFIRMED', 'VERIFICATION_IN_PROGRESS', 'ACTIVE', 'NEEDS_ACTION'].includes(item.status)).map(enrollment => { const student = state.students.find(item => item.id === enrollment.studentId); return { ...publicEnrollment(enrollment, state), student: student ? { id: student.id, name: student.name, email: student.email, phone: student.phone, referenceNumber: student.referenceNumber } : null, documents: state.admissionDocuments.filter(item => item.enrollmentId === enrollment.id).map(publicAdmissionDocument) }; })); }
+    if (method === 'GET' && path === '/api/admin/admission-applications') { requireAdmin(request); const state = await readState(); return send(response, 200, state.enrollments.filter(item => ['DOCUMENTS_SUBMITTED_PENDING_PAYMENT', 'PAYMENT_CONFIRMED', 'VERIFICATION_IN_PROGRESS', 'ACTIVE', 'NEEDS_ACTION'].includes(item.status)).map(enrollment => { const student = state.students.find(item => item.id === enrollment.studentId), notice = enrollment.intakeNotice; return { ...publicEnrollment(enrollment, state), student: student ? { id: student.id, name: student.name, email: student.email, phone: student.phone, referenceNumber: student.referenceNumber } : null, intakeNotice: notice ? { status: notice.status, provider: notice.provider, attemptedAt: notice.attemptedAt, error: notice.error || null } : null, documents: state.admissionDocuments.filter(item => item.enrollmentId === enrollment.id).map(publicAdmissionDocument) }; })); }
     const admissionApplicationMatch = path.match(/^\/api\/admin\/admission-applications\/([^/]+)$/);
     if (method === 'PUT' && admissionApplicationMatch) {
       const admin = requireAdmin(request), input = await body(request), requestedStatus = String(input.status || '').trim(), enrollmentNumber = String(input.enrollmentNumber || '').trim(), dateOfBirth = String(input.dateOfBirth || '').trim(), boardCode = String(input.boardCode || '').trim(), referenceNumber = String(input.referenceNumber || '').trim();
@@ -1099,7 +1257,7 @@ const server = createServer(async (request, response) => {
     }
     const adminAdmissionDocumentMatch = path.match(/^\/api\/admin\/admission-documents\/([^/]+)\/download$/);
     if (method === 'GET' && adminAdmissionDocumentMatch) { requireAdmin(request); const state = await readState(), document = state.admissionDocuments.find(item => item.id === adminAdmissionDocumentMatch[1]); if (!document) return send(response, 404, { error: 'Admission document not found.' }); const stored = await storage.get(document.storageKey); response.writeHead(200, { 'content-type': document.mimeType, 'content-disposition': `attachment; filename="${document.fileName}"` }); return response.end(stored.bytes); }
-    if (method === 'GET' && path === '/api/admin/health') { requireAdmin(request); const state = await readState(), logs = state.syncLogs || [], success = logs.filter(item => item.status === 'SUCCESS').length, failed = logs.filter(item => item.status === 'FAILED' || item.status === 'PORTAL_OFFLINE').length; return send(response, 200, { queued: state.jobs.filter(item => item.status === 'queued').length, processing: state.jobs.filter(item => item.status === 'processing').length, failed: state.jobs.filter(item => item.status === 'failed' || item.status === 'portal_offline').slice(-10), completed: state.jobs.filter(item => item.status === 'completed').slice(-20), successRate: success + failed ? Math.round((success / (success + failed)) * 1000) / 10 : null, audit: state.audit.slice(-25) }); }
+    if (method === 'GET' && path === '/api/admin/health') { requireAdmin(request); const state = await readState(), logs = state.syncLogs || [], success = logs.filter(item => item.status === 'SUCCESS').length, failed = logs.filter(item => item.status === 'FAILED' || item.status === 'PORTAL_OFFLINE').length; return send(response, 200, { queued: state.jobs.filter(item => item.status === 'queued').length, processing: state.jobs.filter(item => item.status === 'processing').length, failed: state.jobs.filter(item => item.status === 'failed' || item.status === 'portal_offline').slice(-10), completed: state.jobs.filter(item => item.status === 'completed').slice(-20), successRate: success + failed ? Math.round((success / (success + failed)) * 1000) / 10 : null, audit: state.audit.slice(-25), readyForWrites: productionWritesReady, readiness: integrationReadiness(state) }); }
     if (method === 'GET' && path === '/api/admin/sync-logs') { requireAdmin(request); const state = await readState(); return send(response, 200, (state.syncLogs || []).slice(-100).reverse()); }
     if (method === 'GET' && path === '/api/admin/batches') { requireAdmin(request); const state = await readState(); return send(response, 200, state.batches); }
     if (method === 'POST' && path === '/api/admin/batches') { requireAdmin(request); const input = await body(request); const created = await updateState(state => { const batch = batchFrom(input); state.batches.push(batch); state.audit.push({ id: uid('audit'), at: now(), action: 'batch.created', batchId: batch.id }); return batch; }); return send(response, 201, created); }
@@ -1114,6 +1272,6 @@ const server = createServer(async (request, response) => {
     if (method === 'PUT' && overrideMatch) { requireAdmin(request); const input = await body(request); if (!['Pending', 'Processing', 'Issued', 'Verified', 'Action Needed'].includes(input.status)) return send(response, 422, { error: 'Invalid document status.' }); const updated = await updateState(state => { const document = state.documents.find(item => item.id === overrideMatch[2] && item.studentId === overrideMatch[1]); if (!document) throw Object.assign(new Error('Document not found.'), { status: 404 }); document.status = input.status; document.updatedAt = now(); document.staffNote = String(input.note || '').slice(0, 500); state.audit.push({ id: uid('audit'), at: now(), action: 'document.override', studentId: overrideMatch[1], documentId: document.id, status: input.status }); return document; }); emit(overrideMatch[1], 'document.updated', updated); return send(response, 200, updated); }
     if (method === 'POST' && path === '/api/admin/test-notification') { requireAdmin(request); const input = await body(request), state = await readState(), student = state.students.find(item => item.id === input.studentId); if (!student) return send(response, 404, { error: 'Student not found.' }); await sendNotification(student, input.message || 'Test notification from NIOS Best Academy.'); return send(response, 202, { accepted: true }); }
     return serveStatic(path, response, request);
-  } catch (error) { console.error(error.message); return send(response, error.status || 500, { error: error.message || 'Internal server error.' }); }
+  } catch (error) { console.error(error.message); return send(response, error.status || 500, { error: error.message || 'Internal server error.' }, error.retryAfter ? { 'retry-after': String(error.retryAfter) } : {}); }
 });
 server.listen(port, () => console.log(`NIOS Best Academy portal service is running at http://localhost:${port}`));

@@ -27,7 +27,7 @@
   <script>
     /* Password assistance is sent into the real support workflow until a
        verified self-service reset provider is configured. */
-    (function(){const forgot=document.querySelector('a[onclick*="Password-reset"]');if(forgot)forgot.onclick=event=>{event.preventDefault();localStorage.setItem('niosContactTopic','Account access support');location.href='contact.html#form'}}());
+    (function(){const forgot=document.querySelector('a[onclick*="Password-reset"]');if(forgot)forgot.onclick=event=>{event.preventDefault();localStorage.setItem('niosContactTopic','Account access support');location.href='/contact#form'}}());
   </script>
 <script src="/password-visibility.js"></script></body>
 </html>
