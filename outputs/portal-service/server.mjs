@@ -33,7 +33,9 @@ function configuredPublicOrigin(value) {
   if (!source) return null;
   try {
     const url = new URL(source);
-    if (url.protocol !== 'https:' || url.username || url.password || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash) return null;
+    // A hosting-provider preview URL is never the academy's public canonical
+    // origin. Reject it even if an old Render environment value still exists.
+    if (url.protocol !== 'https:' || url.username || url.password || (url.pathname !== '/' && url.pathname !== '') || url.search || url.hash || url.hostname.toLowerCase().endsWith('.onrender.com')) return null;
     return url;
   } catch { return null; }
 }

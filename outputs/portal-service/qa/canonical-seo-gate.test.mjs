@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { request as httpRequest } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +50,8 @@ async function waitForService() {
 }
 
 try {
+  const source = await readFile(resolve(serviceDirectory, 'server.mjs'), 'utf8');
+  assert.match(source, /endsWith\('\.onrender\.com'\)/, 'hosting-provider preview origins must never become a canonical public origin');
   await waitForService();
   const previewHome = await get('/', 'niosbest-portal.onrender.com');
   assert.equal(previewHome.status, 200);
@@ -66,7 +68,7 @@ try {
   assert.match(publicHome.body, /https:\/\/academy\.example/, 'canonical metadata must use the configured public origin');
   assert.doesNotMatch(publicHome.body, /https:\/\/niosbest\.in/, 'stale hard-coded canonical origin must be replaced');
   assert.match((await get('/student-app.html', 'academy.example')).headers['x-robots-tag'], /noindex/i, 'private student-app route must remain noindex');
-  console.log('canonical-seo-gate.test.mjs: 9 passed');
+  console.log('canonical-seo-gate.test.mjs: 10 passed');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolvePromise => child.once('exit', resolvePromise));
