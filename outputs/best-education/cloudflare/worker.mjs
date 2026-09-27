@@ -13,6 +13,7 @@ const FULL_COURSE_BUNDLE_PRICE = 399;
 const ALLOWED_TYPES = new Set(['sample', 'pyq', 'mcq', 'important']);
 const ALLOWED_CLASSES = new Set(['10', '11', '12']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const IDENTIFIER_PATTERN = /^[A-Za-z0-9-]{1,80}$/;
 
 const scienceLessons = [
   'Chemical Reactions and Equations', 'Acids, Bases and Salts', 'Metals and Non-metals',
@@ -22,7 +23,7 @@ const scienceLessons = [
   'Our Environment', 'Sustainable Management of Natural Resources'
 ];
 
-const staticPagePaths = new Set(['/', '/index.html', '/admin.html', '/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html']);
+const staticPagePaths = new Set(['/', '/index.html', '/admin.html', '/library.html', '/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html']);
 
 function securityHeaders(contentType = 'application/json; charset=utf-8') {
   return {
@@ -179,8 +180,61 @@ function requireFixedCardPrice(inputPrice, isBundle, source = 'A study card') {
   return expected;
 }
 
+function isTrue(value) {
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+function optionalBoolean(input, field, fallback) {
+  if (!Object.prototype.hasOwnProperty.call(input, field) || input[field] === undefined || input[field] === null || input[field] === '') return fallback;
+  if ([true, false, 1, 0, '1', '0', 'true', 'false'].includes(input[field])) return isTrue(input[field]);
+  throw new Error(`Choose whether ${field} is enabled.`);
+}
+
+function optionalSortOrder(input, field, fallback = 0) {
+  if (!Object.prototype.hasOwnProperty.call(input, field) || input[field] === undefined || input[field] === null || input[field] === '') return fallback;
+  const value = Number(input[field]);
+  if (!Number.isSafeInteger(value) || value < -100000 || value > 100000) throw new Error(`${field} must be a whole number between -100000 and 100000.`);
+  return value;
+}
+
+function optionalIdentifier(value, label = 'Identifier') {
+  const identifier = String(value || '').trim();
+  if (!identifier) return '';
+  if (!IDENTIFIER_PATTERN.test(identifier)) throw new Error(`${label} is invalid.`);
+  return identifier;
+}
+
+const CARD_SECTION_CONTEXT_COLUMNS = `
+  c.*,
+  s.id AS section_context_id,
+  s.parent_id AS section_parent_id,
+  s.title AS section_title,
+  s.slug AS section_slug,
+  s.is_published AS section_is_published,
+  p.id AS parent_section_id,
+  p.title AS parent_section_title,
+  p.slug AS parent_section_slug,
+  p.is_published AS parent_section_is_published`;
+
+const CARD_SECTION_CONTEXT_JOINS = `
+  LEFT JOIN catalog_sections AS s ON s.id = c.section_id
+  LEFT JOIN catalog_sections AS p ON p.id = s.parent_id`;
+
+function cardSelectSql(where = '', orderBy = 'c.sort_order ASC, c.updated_at DESC', limit = '') {
+  return `SELECT ${CARD_SECTION_CONTEXT_COLUMNS} FROM cards AS c ${CARD_SECTION_CONTEXT_JOINS}${where ? ` WHERE ${where}` : ''} ORDER BY ${orderBy}${limit ? ` LIMIT ${limit}` : ''}`;
+}
+
+function cardIsPubliclyVisible(card) {
+  return Boolean(card?.isPublished)
+    && (!card.sectionId || (card.sectionIsPublished && (!card.sectionParentId || card.parentSectionIsPublished)));
+}
+
 function rowToCard(row) {
   const isBundle = isFullCourseBundle(row.is_bundle);
+  const sectionId = String(row.section_id || '').trim();
+  const sectionParentId = String(row.section_parent_id || '').trim();
+  const sectionTitle = String(row.section_title || '').trim();
+  const rootTitle = sectionParentId ? String(row.parent_section_title || '').trim() : sectionTitle;
   return {
     id: row.id,
     type: row.type,
@@ -195,6 +249,22 @@ function rowToCard(row) {
     fileKey: row.file_key,
     isBundle,
     slug: row.slug,
+    sectionId,
+    resourceLabel: String(row.resource_label || '').trim(),
+    sortOrder: Number.isSafeInteger(Number(row.sort_order)) ? Number(row.sort_order) : 0,
+    isPublished: row.is_published === undefined || row.is_published === null ? true : isTrue(row.is_published),
+    // These labels are for the flexible catalogue. The original className/type
+    // values remain untouched so the original class/category pages keep working.
+    displayClassName: rootTitle || row.class_name,
+    displayType: sectionTitle || row.type,
+    sectionTitle,
+    sectionSlug: String(row.section_slug || '').trim(),
+    sectionParentId,
+    sectionIsPublished: sectionId ? isTrue(row.section_is_published) : true,
+    parentSectionTitle: String(row.parent_section_title || '').trim(),
+    parentSectionSlug: String(row.parent_section_slug || '').trim(),
+    parentSectionId: String(row.parent_section_id || '').trim(),
+    parentSectionIsPublished: sectionParentId ? isTrue(row.parent_section_is_published) : true,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -202,22 +272,27 @@ function rowToCard(row) {
 
 function publicCard(card) {
   const { fileKey, ...safe } = card;
-  return { ...safe, available: Boolean(fileKey) };
+  return { ...safe, available: Boolean(fileKey) && cardIsPubliclyVisible(card) };
 }
 
 async function readCards(env) {
-  const result = await env.DB.prepare('SELECT * FROM cards ORDER BY updated_at DESC LIMIT 5000').all();
+  const result = await env.DB.prepare(cardSelectSql('', 'c.sort_order ASC, c.updated_at DESC', '5000')).all();
   return (result.results || []).map(rowToCard);
 }
 
 async function getCard(env, id) {
-  const row = await env.DB.prepare('SELECT * FROM cards WHERE id = ?').bind(id).first();
+  const row = await env.DB.prepare(cardSelectSql('c.id = ?', 'c.updated_at DESC', '1')).bind(id).first();
   return row ? rowToCard(row) : null;
 }
 
 async function getCardBySlug(env, slug) {
-  const row = await env.DB.prepare('SELECT * FROM cards WHERE slug = ?').bind(slug).first();
+  const row = await env.DB.prepare(cardSelectSql('c.slug = ?', 'c.updated_at DESC', '1')).bind(slug).first();
   return row ? rowToCard(row) : null;
+}
+
+async function getPublicCardBySlug(env, slug) {
+  const card = await getCardBySlug(env, slug);
+  return card && cardIsPubliclyVisible(card) ? card : null;
 }
 
 async function slugAvailable(env, slug, existingId) {
@@ -233,6 +308,234 @@ async function uniqueSlug(env, value, existingId) {
   return candidate;
 }
 
+function rowToSection(row) {
+  return {
+    id: row.id,
+    parentId: String(row.parent_id || '').trim(),
+    title: row.title,
+    slug: row.slug,
+    description: row.description || '',
+    icon: row.icon || '',
+    sortOrder: Number.isSafeInteger(Number(row.sort_order)) ? Number(row.sort_order) : 0,
+    isPublished: isTrue(row.is_published),
+    showOnHome: isTrue(row.show_on_home),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function sectionContextFromRow(row) {
+  if (!row) return null;
+  const section = rowToSection(row);
+  const parentId = section.parentId;
+  const parentTitle = String(row.parent_section_title || '').trim();
+  const parentSlug = String(row.parent_section_slug || '').trim();
+  const parentIsPublished = parentId ? isTrue(row.parent_section_is_published) : true;
+  if (parentId && !parentTitle) return null;
+  return {
+    ...section,
+    rootId: parentId || section.id,
+    rootTitle: parentTitle || section.title,
+    rootSlug: parentSlug || section.slug,
+    sectionTitle: section.title,
+    sectionSlug: section.slug,
+    parentTitle,
+    parentSlug,
+    parentIsPublished
+  };
+}
+
+async function getSection(env, id) {
+  const row = await env.DB.prepare('SELECT * FROM catalog_sections WHERE id = ?').bind(id).first();
+  return row ? rowToSection(row) : null;
+}
+
+async function getSectionContext(env, id) {
+  const row = await env.DB.prepare(`SELECT s.*, p.title AS parent_section_title, p.slug AS parent_section_slug,
+      p.is_published AS parent_section_is_published, p.parent_id AS parent_parent_id
+    FROM catalog_sections AS s LEFT JOIN catalog_sections AS p ON p.id = s.parent_id WHERE s.id = ?`).bind(id).first();
+  if (!row || (row.parent_id && (!row.parent_section_title || row.parent_parent_id))) return null;
+  return sectionContextFromRow(row);
+}
+
+async function readSectionContexts(env) {
+  const result = await env.DB.prepare(`SELECT s.*, p.title AS parent_section_title, p.slug AS parent_section_slug,
+      p.is_published AS parent_section_is_published, p.parent_id AS parent_parent_id
+    FROM catalog_sections AS s LEFT JOIN catalog_sections AS p ON p.id = s.parent_id
+    ORDER BY s.sort_order ASC, s.title COLLATE NOCASE ASC`).all();
+  const contexts = new Map();
+  for (const row of result.results || []) {
+    if (!row.parent_id || (row.parent_section_title && !row.parent_parent_id)) {
+      const context = sectionContextFromRow(row);
+      if (context) contexts.set(context.id, context);
+    }
+  }
+  return contexts;
+}
+
+async function readSections(env) {
+  const result = await env.DB.prepare('SELECT * FROM catalog_sections ORDER BY parent_id IS NOT NULL, sort_order ASC, title COLLATE NOCASE ASC').all();
+  return (result.results || []).map(rowToSection);
+}
+
+async function sectionSlugAvailable(env, slug, existingId) {
+  const row = await env.DB.prepare('SELECT id FROM catalog_sections WHERE slug = ?').bind(slug).first();
+  return !row || row.id === existingId;
+}
+
+async function uniqueSectionSlug(env, value, existingId) {
+  const base = slugify(value);
+  let candidate = base;
+  let attempt = 2;
+  while (!(await sectionSlugAvailable(env, candidate, existingId))) candidate = `${base.slice(0, 104)}-${attempt++}`;
+  return candidate;
+}
+
+function legacyFieldsForSection(context) {
+  const root = /^class-(10|11|12)$/.exec(context.rootId || '');
+  if (!root) return null;
+  const type = ['sample', 'pyq', 'mcq', 'important'].find((candidate) => context.id === `class-${root[1]}-${candidate}`);
+  return type ? { className: root[1], type } : null;
+}
+
+function defaultCardPublished(section) {
+  return !section || Boolean(legacyFieldsForSection(section));
+}
+
+async function cleanSection(env, input, existing = null) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid catalogue section.');
+  const supplied = (field, fallback = '') => Object.prototype.hasOwnProperty.call(input, field) ? input[field] : fallback;
+  const title = String(supplied('title', existing?.title || '') || '').trim().slice(0, 90);
+  const description = String(supplied('description', existing?.description || '') || '').trim().slice(0, 500);
+  const icon = String(supplied('icon', existing?.icon || '') || '').trim().slice(0, 64);
+  if (!title) throw new Error('Add a section title.');
+  const id = existing?.id || crypto.randomUUID();
+  const suppliedParent = Object.prototype.hasOwnProperty.call(input, 'parentId') ? input.parentId : existing?.parentId;
+  const parentId = optionalIdentifier(suppliedParent, 'Parent section');
+  if (parentId === id) throw new Error('A section cannot be its own parent.');
+  if (parentId) {
+    const parent = await getSection(env, parentId);
+    if (!parent) throw new Error('Choose an existing top-level section.');
+    if (parent.parentId) throw new Error('Catalogue sections can be only two levels deep.');
+    if (existing && existing.parentId !== parentId) {
+      const children = await env.DB.prepare('SELECT 1 FROM catalog_sections WHERE parent_id = ? LIMIT 1').bind(existing.id).first();
+      if (children) throw new Error('A section with child tiles must remain at the top level.');
+    }
+  }
+  const sortOrder = optionalSortOrder(input, 'sortOrder', existing?.sortOrder || 0);
+  const isPublished = optionalBoolean(input, 'isPublished', existing?.isPublished || false);
+  const showOnHome = optionalBoolean(input, 'showOnHome', existing?.showOnHome || false);
+  const desiredSlug = String(input.slug || '').trim() || existing?.slug || title;
+  const slug = await uniqueSectionSlug(env, desiredSlug, id);
+  const now = new Date().toISOString();
+  return {
+    id, parentId, title, slug, description, icon, sortOrder, isPublished, showOnHome,
+    createdAt: existing?.createdAt || now,
+    updatedAt: now
+  };
+}
+
+function sectionInsertStatement(env, section) {
+  return env.DB.prepare(`INSERT INTO catalog_sections
+    (id,parent_id,title,slug,description,icon,sort_order,is_published,show_on_home,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(section.id, section.parentId || null, section.title, section.slug, section.description, section.icon,
+      section.sortOrder, Number(section.isPublished), Number(section.showOnHome), section.createdAt, section.updatedAt);
+}
+
+async function insertSection(env, section) {
+  await sectionInsertStatement(env, section).run();
+  return section;
+}
+
+async function updateSection(env, section) {
+  await env.DB.prepare(`UPDATE catalog_sections SET parent_id=?,title=?,slug=?,description=?,icon=?,sort_order=?,
+      is_published=?,show_on_home=?,updated_at=? WHERE id=?`)
+    .bind(section.parentId || null, section.title, section.slug, section.description, section.icon, section.sortOrder,
+      Number(section.isPublished), Number(section.showOnHome), section.updatedAt, section.id).run();
+  return section;
+}
+
+function importedSectionSlug(value, usedSlugs) {
+  const slug = slugify(value);
+  if (usedSlugs.has(slug)) throw new Error('The backup contains duplicate catalogue section slugs.');
+  usedSlugs.add(slug);
+  return slug;
+}
+
+function cleanImportedSection(input, usedSlugs) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('The backup contains an invalid catalogue section.');
+  const id = optionalIdentifier(input.id, 'Section') || crypto.randomUUID();
+  const parentId = optionalIdentifier(input.parentId, 'Parent section');
+  if (parentId === id) throw new Error('A catalogue section cannot be its own parent.');
+  const title = String(input.title || '').trim().slice(0, 90);
+  const description = String(input.description || '').trim().slice(0, 500);
+  const icon = String(input.icon || '').trim().slice(0, 64);
+  if (!title) throw new Error('The backup contains a catalogue section without a title.');
+  const now = new Date().toISOString();
+  return {
+    id,
+    parentId,
+    title,
+    slug: importedSectionSlug(input.slug || title, usedSlugs),
+    description,
+    icon,
+    sortOrder: optionalSortOrder(input, 'sortOrder', 0),
+    isPublished: optionalBoolean(input, 'isPublished', false),
+    showOnHome: optionalBoolean(input, 'showOnHome', false),
+    createdAt: importTimestamp(input.createdAt, now),
+    updatedAt: importTimestamp(input.updatedAt, now)
+  };
+}
+
+function importedSectionContexts(sections) {
+  const sectionsById = new Map();
+  for (const section of sections) {
+    if (sectionsById.has(section.id)) throw new Error('The backup contains duplicate catalogue section IDs.');
+    sectionsById.set(section.id, section);
+  }
+  const contexts = new Map();
+  for (const section of sections) {
+    const parent = section.parentId ? sectionsById.get(section.parentId) : null;
+    if (section.parentId && !parent) throw new Error('The backup references a parent catalogue section that does not exist.');
+    if (parent?.parentId) throw new Error('The backup contains catalogue sections deeper than two levels.');
+    contexts.set(section.id, {
+      ...section,
+      rootId: parent?.id || section.id,
+      rootTitle: parent?.title || section.title,
+      rootSlug: parent?.slug || section.slug,
+      sectionTitle: section.title,
+      sectionSlug: section.slug,
+      parentTitle: parent?.title || '',
+      parentSlug: parent?.slug || '',
+      parentIsPublished: parent?.isPublished ?? true
+    });
+  }
+  return contexts;
+}
+
+function bulkSectionImportStatement(env, sections) {
+  const payload = JSON.stringify(sections.map((section) => ({
+    id: section.id,
+    parentId: section.parentId || null,
+    title: section.title,
+    slug: section.slug,
+    description: section.description,
+    icon: section.icon,
+    sortOrder: section.sortOrder,
+    isPublished: Number(section.isPublished),
+    showOnHome: Number(section.showOnHome),
+    createdAt: section.createdAt,
+    updatedAt: section.updatedAt
+  })));
+  return env.DB.prepare(`INSERT INTO catalog_sections
+    (id,parent_id,title,slug,description,icon,sort_order,is_published,show_on_home,created_at,updated_at)
+    SELECT json_extract(value,'$.id'), json_extract(value,'$.parentId'), json_extract(value,'$.title'), json_extract(value,'$.slug'),
+      json_extract(value,'$.description'), json_extract(value,'$.icon'), json_extract(value,'$.sortOrder'), json_extract(value,'$.isPublished'),
+      json_extract(value,'$.showOnHome'), json_extract(value,'$.createdAt'), json_extract(value,'$.updatedAt')
+    FROM json_each(?)`).bind(payload);
+}
+
 function safePdfFilename(value) {
   const filename = String(value || '').trim();
   if (!filename || filename.length > 180 || !/^[a-z0-9][a-z0-9._ ()-]*\.pdf$/i.test(filename)) {
@@ -242,21 +545,33 @@ function safePdfFilename(value) {
 }
 
 async function cleanCard(env, input, existing = null) {
-  const type = String(input.type || '');
-  const className = String(input.className || '');
-  const subject = String(input.subject || '').trim().slice(0, 80);
-  const title = String(input.title || '').trim().slice(0, 140);
-  const description = String(input.description || '').trim().slice(0, 500);
-  let link = String(input.link || '').trim();
-  let fileKey = String(input.fileKey || '').trim();
-  const isBundle = isFullCourseBundle(input.isBundle);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid card details.');
+  const supplied = (field, fallback = '') => Object.prototype.hasOwnProperty.call(input, field) ? input[field] : fallback;
+  const sectionId = optionalIdentifier(supplied('sectionId', existing?.sectionId || ''), 'Section');
+  const section = sectionId ? await getSectionContext(env, sectionId) : null;
+  if (sectionId && !section) throw new Error('Choose an existing catalogue section.');
+  const title = String(supplied('title', existing?.title || '') || '').trim().slice(0, 140);
+  const description = String(supplied('description', existing?.description || '') || '').trim().slice(0, 500);
+  const resourceLabel = String(supplied('resourceLabel', existing?.resourceLabel || '') || '').trim().slice(0, 100);
+  let subject = String(supplied('subject', existing?.subject || '') || '').trim().slice(0, 80);
+  let link = String(supplied('link', existing?.link || '') || '').trim();
+  let fileKey = String(supplied('fileKey', existing?.fileKey || '') || '').trim();
+  const isBundle = Object.prototype.hasOwnProperty.call(input, 'isBundle') ? isFullCourseBundle(input.isBundle) : Boolean(existing?.isBundle);
   const price = requireFixedCardPrice(input.price, isBundle);
-  if (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className) || !subject || !title) {
+  let type = String(supplied('type', existing?.type || '') || '').trim().slice(0, 80);
+  let className = String(supplied('className', existing?.className || '') || '').trim().slice(0, 80);
+  if (section) {
+    const legacy = legacyFieldsForSection(section);
+    className = legacy?.className || limitUtf8(section.rootTitle, 80);
+    type = legacy?.type || limitUtf8(section.sectionTitle, 80);
+    subject = subject || resourceLabel || limitUtf8(section.sectionTitle, 80);
+  }
+  if ((!section && (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className))) || !subject || !title) {
     throw new Error('Invalid card details.');
   }
   if (link) {
     const url = new URL(link);
-    if (!['https:', 'http:'].includes(url.protocol)) throw new Error('Invalid preview link.');
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid preview link.');
     link = url.href;
   }
   if (fileKey) {
@@ -264,10 +579,18 @@ async function cleanCard(env, input, existing = null) {
     if (!await env.PAPERS.head(fileKey)) throw new Error('Upload the selected PDF before linking it to a card.');
   }
   const id = existing?.id || crypto.randomUUID();
-  const slug = await uniqueSlug(env, input.slug || `${type}-class-${className}-${subject}-${title}`, id);
+  const desiredSlug = String(input.slug || '').trim() || existing?.slug || `${type}-class-${className}-${subject}-${title}`;
+  const slug = await uniqueSlug(env, desiredSlug, id);
+  const sortOrder = optionalSortOrder(input, 'sortOrder', existing?.sortOrder || 0);
+  // Existing legacy cards stay publicly visible. New cards placed in flexible
+  // sections are drafts until the admin explicitly publishes them.
+  const isPublished = optionalBoolean(input, 'isPublished', existing ? existing.isPublished : defaultCardPublished(section));
   const now = new Date().toISOString();
   return {
     id, type, className, subject, title, description, price: String(price), link, fileKey, isBundle, slug,
+    sectionId, resourceLabel, sortOrder, isPublished,
+    displayClassName: section?.rootTitle || className,
+    displayType: section?.sectionTitle || type,
     createdAt: existing?.createdAt || now,
     updatedAt: now
   };
@@ -287,18 +610,28 @@ function importTimestamp(value, fallback) {
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
 }
 
-function cleanImportedCard(input, usedSlugs, pdfFiles) {
+function cleanImportedCard(input, usedSlugs, pdfFiles, sectionContexts) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('The backup contains an invalid card.');
-  const type = String(input.type || '');
-  const className = String(input.className || '');
-  const subject = String(input.subject || '').trim().slice(0, 80);
+  const sectionId = optionalIdentifier(input.sectionId, 'Section');
+  const section = sectionId ? sectionContexts.get(sectionId) : null;
+  if (sectionId && !section) throw new Error('The backup references a catalogue section that does not exist.');
+  let type = String(input.type || '').trim().slice(0, 80);
+  let className = String(input.className || '').trim().slice(0, 80);
+  let subject = String(input.subject || '').trim().slice(0, 80);
   const title = String(input.title || '').trim().slice(0, 140);
   const description = String(input.description || '').trim().slice(0, 500);
+  const resourceLabel = String(input.resourceLabel || '').trim().slice(0, 100);
   let link = String(input.link || '').trim();
   let fileKey = String(input.fileKey || '').trim();
   const isBundle = isFullCourseBundle(input.isBundle);
   const price = requireFixedCardPrice(input.price, isBundle, 'Each imported study card');
-  if (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className) || !subject || !title) {
+  if (section) {
+    const legacy = legacyFieldsForSection(section);
+    className = legacy?.className || limitUtf8(section.rootTitle, 80);
+    type = legacy?.type || limitUtf8(section.sectionTitle, 80);
+    subject = subject || resourceLabel || limitUtf8(section.sectionTitle, 80);
+  }
+  if ((!section && (!ALLOWED_TYPES.has(type) || !ALLOWED_CLASSES.has(className))) || !subject || !title) {
     throw new Error('The backup contains invalid card details.');
   }
   if (link) {
@@ -322,6 +655,10 @@ function cleanImportedCard(input, usedSlugs, pdfFiles) {
     link,
     fileKey,
     isBundle,
+    sectionId,
+    resourceLabel,
+    sortOrder: optionalSortOrder(input, 'sortOrder', 0),
+    isPublished: optionalBoolean(input, 'isPublished', defaultCardPublished(section)),
     slug: uniqueSlugFromSet(input.slug || `${type}-class-${className}-${subject}-${title}`, usedSlugs),
     createdAt: importTimestamp(input.createdAt, now),
     updatedAt: now
@@ -329,8 +666,11 @@ function cleanImportedCard(input, usedSlugs, pdfFiles) {
 }
 
 function cardInsertStatement(env, card) {
-  return env.DB.prepare('INSERT INTO cards (id,type,class_name,subject,title,description,price,link,file_key,is_bundle,slug,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(card.id, card.type, card.className, card.subject, card.title, card.description, Number(card.price), card.link, card.fileKey, Number(card.isBundle), card.slug, card.createdAt, card.updatedAt);
+  return env.DB.prepare(`INSERT INTO cards
+    (id,type,class_name,subject,title,description,price,link,file_key,is_bundle,slug,section_id,resource_label,sort_order,is_published,created_at,updated_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+    .bind(card.id, card.type, card.className, card.subject, card.title, card.description, Number(card.price), card.link, card.fileKey,
+      Number(card.isBundle), card.slug, card.sectionId || null, card.resourceLabel, card.sortOrder, Number(card.isPublished), card.createdAt, card.updatedAt);
 }
 
 function bulkCardImportStatement(env, cards) {
@@ -346,14 +686,19 @@ function bulkCardImportStatement(env, cards) {
     fileKey: card.fileKey,
     isBundle: Number(card.isBundle),
     slug: card.slug,
+    sectionId: card.sectionId || null,
+    resourceLabel: card.resourceLabel,
+    sortOrder: card.sortOrder,
+    isPublished: Number(card.isPublished),
     createdAt: card.createdAt,
     updatedAt: card.updatedAt
   })));
-  return env.DB.prepare(`INSERT INTO cards (id,type,class_name,subject,title,description,price,link,file_key,is_bundle,slug,created_at,updated_at)
+  return env.DB.prepare(`INSERT INTO cards (id,type,class_name,subject,title,description,price,link,file_key,is_bundle,slug,section_id,resource_label,sort_order,is_published,created_at,updated_at)
     SELECT json_extract(value,'$.id'), json_extract(value,'$.type'), json_extract(value,'$.className'), json_extract(value,'$.subject'),
       json_extract(value,'$.title'), json_extract(value,'$.description'), json_extract(value,'$.price'), json_extract(value,'$.link'),
-      json_extract(value,'$.fileKey'), json_extract(value,'$.isBundle'), json_extract(value,'$.slug'), json_extract(value,'$.createdAt'),
-      json_extract(value,'$.updatedAt')
+      json_extract(value,'$.fileKey'), json_extract(value,'$.isBundle'), json_extract(value,'$.slug'), json_extract(value,'$.sectionId'),
+      json_extract(value,'$.resourceLabel'), json_extract(value,'$.sortOrder'), json_extract(value,'$.isPublished'),
+      json_extract(value,'$.createdAt'), json_extract(value,'$.updatedAt')
     FROM json_each(?)`).bind(payload);
 }
 
@@ -363,8 +708,10 @@ async function insertCard(env, card) {
 }
 
 async function updateCard(env, card) {
-  await env.DB.prepare('UPDATE cards SET type=?,class_name=?,subject=?,title=?,description=?,price=?,link=?,file_key=?,is_bundle=?,slug=?,updated_at=? WHERE id=?')
-    .bind(card.type, card.className, card.subject, card.title, card.description, Number(card.price), card.link, card.fileKey, Number(card.isBundle), card.slug, card.updatedAt, card.id).run();
+  await env.DB.prepare(`UPDATE cards SET type=?,class_name=?,subject=?,title=?,description=?,price=?,link=?,file_key=?,is_bundle=?,slug=?,
+      section_id=?,resource_label=?,sort_order=?,is_published=?,updated_at=? WHERE id=?`)
+    .bind(card.type, card.className, card.subject, card.title, card.description, Number(card.price), card.link, card.fileKey,
+      Number(card.isBundle), card.slug, card.sectionId || null, card.resourceLabel, card.sortOrder, Number(card.isPublished), card.updatedAt, card.id).run();
   return card;
 }
 
@@ -384,21 +731,26 @@ function seedPapers() {
 }
 
 async function allPapers(env) {
-  const cards = (await readCards(env)).map(publicCard);
+  const cards = (await readCards(env)).filter(cardIsPubliclyVisible).map(publicCard);
   const cardSlugs = new Set(cards.map((card) => card.slug));
   return [...cards, ...seedPapers().filter((paper) => !cardSlugs.has(paper.slug))];
+}
+
+function publicCardVisibilityClause() {
+  return `c.is_published = 1 AND (c.section_id IS NULL OR (s.id IS NOT NULL AND s.is_published = 1
+    AND (s.parent_id IS NULL OR (p.id IS NOT NULL AND p.is_published = 1))))`;
 }
 
 function cardFilterStatement(env, searchParams, limit = 100) {
   const className = String(searchParams.get('class') || '');
   const subject = String(searchParams.get('subject') || '').trim();
   const type = String(searchParams.get('type') || '');
-  const clauses = [];
+  const clauses = [publicCardVisibilityClause()];
   const bindings = [];
-  if (ALLOWED_CLASSES.has(className)) { clauses.push('class_name = ?'); bindings.push(className); }
-  if (subject) { clauses.push('LOWER(subject) = ?'); bindings.push(subject.toLowerCase()); }
-  if (ALLOWED_TYPES.has(type)) { clauses.push('type = ?'); bindings.push(type); }
-  const statement = env.DB.prepare(`SELECT * FROM cards${clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''} ORDER BY updated_at DESC LIMIT ${limit}`);
+  if (ALLOWED_CLASSES.has(className)) { clauses.push('c.class_name = ?'); bindings.push(className); }
+  if (subject) { clauses.push('LOWER(c.subject) = ?'); bindings.push(subject.toLowerCase()); }
+  if (ALLOWED_TYPES.has(type)) { clauses.push('c.type = ?'); bindings.push(type); }
+  const statement = env.DB.prepare(cardSelectSql(clauses.join(' AND '), 'c.sort_order ASC, c.updated_at DESC', limit));
   return bindings.length ? statement.bind(...bindings) : statement;
 }
 
@@ -408,7 +760,7 @@ async function filteredCards(env, searchParams, limit = 100) {
 }
 
 function matchesPaper(paper, { query, className, subject, type }) {
-  const haystack = `${paper.className} ${paper.subject} ${paper.type} ${paper.title} ${paper.description}`.toLowerCase();
+  const haystack = `${paper.displayClassName || paper.className} ${paper.displayType || paper.type} ${paper.className} ${paper.subject} ${paper.type} ${paper.resourceLabel || ''} ${paper.title} ${paper.description}`.toLowerCase();
   return (!className || paper.className === className)
     && (!subject || paper.subject.toLowerCase() === subject.toLowerCase())
     && (!type || paper.type === type)
@@ -435,22 +787,25 @@ async function filterPapers(env, searchParams) {
   const { query, className } = searchTerms(searchParams);
   const subject = String(searchParams.get('subject') || '').trim();
   const type = String(searchParams.get('type') || '');
-  const clauses = [];
+  const clauses = [publicCardVisibilityClause()];
   const bindings = [];
-  if (ALLOWED_CLASSES.has(className)) { clauses.push('class_name = ?'); bindings.push(className); }
-  if (subject) { clauses.push('LOWER(subject) = ?'); bindings.push(subject.toLowerCase()); }
-  if (ALLOWED_TYPES.has(type)) { clauses.push('type = ?'); bindings.push(type); }
+  if (ALLOWED_CLASSES.has(className)) { clauses.push('c.class_name = ?'); bindings.push(className); }
+  if (subject) { clauses.push('LOWER(c.subject) = ?'); bindings.push(subject.toLowerCase()); }
+  if (ALLOWED_TYPES.has(type)) { clauses.push('c.type = ?'); bindings.push(type); }
   if (query) {
     const expression = ftsExpression(query);
     if (expression) {
-      clauses.push('rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?)');
-      bindings.push(expression);
+      // `resource_label` was added after the legacy FTS index. Keep it
+      // searchable without rebuilding that index (and keep all legacy search
+      // terms on its fast FTS path).
+      clauses.push("(c.rowid IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH ?) OR instr(LOWER(COALESCE(c.resource_label, '')), ?) > 0)");
+      bindings.push(expression, query);
     } else {
-      clauses.push("instr(LOWER(class_name || ' ' || subject || ' ' || type || ' ' || title || ' ' || description), ?) > 0");
+      clauses.push("instr(LOWER(c.class_name || ' ' || c.subject || ' ' || c.type || ' ' || COALESCE(c.resource_label, '') || ' ' || c.title || ' ' || c.description), ?) > 0");
       bindings.push(query);
     }
   }
-  const statement = env.DB.prepare(`SELECT * FROM cards${clauses.length ? ` WHERE ${clauses.join(' AND ')}` : ''} ORDER BY updated_at DESC LIMIT 100`);
+  const statement = env.DB.prepare(cardSelectSql(clauses.join(' AND '), 'c.sort_order ASC, c.updated_at DESC', '100'));
   const boundStatement = bindings.length ? statement.bind(...bindings) : statement;
   const custom = ((await boundStatement.all()).results || []).map(rowToCard).map(publicCard);
   const customSlugs = new Set(custom.map((paper) => paper.slug));
@@ -460,9 +815,51 @@ async function filterPapers(env, searchParams) {
 }
 
 async function findPaperBySlug(env, slug) {
-  const card = await getCardBySlug(env, slug);
+  const card = await getPublicCardBySlug(env, slug);
   if (card) return publicCard(card);
   return seedPapers().find((paper) => paper.slug === slug) || null;
+}
+
+function publicSection(section) {
+  return {
+    id: section.id,
+    parentId: section.parentId,
+    title: section.title,
+    slug: section.slug,
+    description: section.description,
+    icon: section.icon,
+    sortOrder: section.sortOrder,
+    isPublished: section.isPublished,
+    showOnHome: section.showOnHome,
+    updatedAt: section.updatedAt,
+    cards: [],
+    children: []
+  };
+}
+
+async function publicCatalog(env) {
+  const allSections = await readSections(env);
+  const sectionsById = new Map(allSections.map((section) => [section.id, section]));
+  const visibleSections = allSections.filter((section) => section.isPublished
+    && (!section.parentId || sectionsById.get(section.parentId)?.isPublished));
+  const nodes = new Map(visibleSections.map((section) => [section.id, publicSection(section)]));
+  const roots = [];
+  for (const section of visibleSections) {
+    const node = nodes.get(section.id);
+    if (section.parentId) {
+      const parent = nodes.get(section.parentId);
+      if (parent) parent.children.push(node);
+    } else {
+      roots.push(node);
+    }
+  }
+  const unsectionedCards = [];
+  for (const card of (await readCards(env)).filter(cardIsPubliclyVisible)) {
+    const target = card.sectionId ? nodes.get(card.sectionId) : null;
+    if (target) target.cards.push(publicCard(card));
+    else if (!card.sectionId) unsectionedCards.push(publicCard(card));
+  }
+  return { sections: roots, cards: unsectionedCards };
 }
 
 async function signedDownloadToken(env, card) {
@@ -493,7 +890,7 @@ async function secureDownload(request, env, token) {
   let filename;
   try { filename = safePdfFilename(data.fileKey); } catch { return json({ error: 'This download link is invalid.' }, 403); }
   const card = await getCard(env, data.cardId);
-  if (!card || card.fileKey !== filename) return json({ error: 'This download link is no longer available.' }, 403);
+  if (!card || !cardIsPubliclyVisible(card) || card.fileKey !== filename) return json({ error: 'This download link is no longer available.' }, 403);
   const object = await env.PAPERS.get(filename);
   if (!object) return json({ error: 'The protected PDF file was not found.' }, 404);
   const headers = new Headers(securityHeaders('application/pdf'));
@@ -533,6 +930,15 @@ async function hasActivePaidDownload(env, cardId) {
 async function hasAnyActivePaidDownloads(env) {
   const cutoff = new Date(Date.now() - DOWNLOAD_DURATION_MS).toISOString();
   const result = await env.DB.prepare("SELECT 1 AS active FROM orders WHERE status IN ('captured','fulfilled') AND recovery_expires_at >= ? LIMIT 1").bind(cutoff).first();
+  return Boolean(result?.active);
+}
+
+async function sectionHasActivePaidDownloads(env, sectionId) {
+  const cutoff = new Date(Date.now() - DOWNLOAD_DURATION_MS).toISOString();
+  const result = await env.DB.prepare(`SELECT 1 AS active FROM orders AS o INNER JOIN cards AS c ON c.id = o.card_id
+    WHERE (c.section_id = ? OR c.section_id IN (SELECT id FROM catalog_sections WHERE parent_id = ?))
+      AND o.status IN ('captured','fulfilled') AND o.recovery_expires_at >= ? LIMIT 1`)
+    .bind(sectionId, sectionId, cutoff).first();
   return Boolean(result?.active);
 }
 
@@ -693,9 +1099,9 @@ async function renderStaticPage(request, env) {
 
 async function renderSitemap(request, env) {
   const origin = new URL(request.url).origin;
-  const pages = ['/', '/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html'];
+  const pages = ['/', '/library.html', '/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html'];
   const fixed = pages.map((page) => `  <url><loc>${escapeXml(`${origin}${page}`)}</loc></url>`);
-  const cards = (await readCards(env)).filter((card) => card.fileKey);
+  const cards = (await readCards(env)).filter((card) => card.fileKey && cardIsPubliclyVisible(card));
   const cardUrls = cards.map((card) => `  <url><loc>${escapeXml(`${origin}/paper/${card.slug}`)}</loc><lastmod>${card.updatedAt.slice(0, 10)}</lastmod></url>`);
   return text(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${[...fixed, ...cardUrls].join('\n')}\n</urlset>\n`, 200, 'application/xml; charset=utf-8');
 }
@@ -713,13 +1119,16 @@ function paperPageHtml(request, paper) {
   const title = `${paper.title} | Best Education`;
   const description = paper.description || 'Chapter-wise study material for focused revision.';
   const indexable = paper.available && !isWorkersDev(request.url);
+  const rawEducationalLevel = String(paper.displayClassName || paper.className || '').trim();
+  const educationalLevel = /^\d+$/.test(rawEducationalLevel) ? `Class ${rawEducationalLevel}` : (rawEducationalLevel || 'School and competitive exam preparation');
+  const learningResourceType = String(paper.displayType || paper.type || 'Study material');
   const productSchema = JSON.stringify({
     '@context': 'https://schema.org',
     '@type': 'LearningResource',
     name: paper.title,
     description,
-    educationalLevel: `Class ${paper.className}`,
-    learningResourceType: paper.type,
+    educationalLevel,
+    learningResourceType,
     provider: { '@type': 'EducationalOrganization', name: 'Best Education' },
     offers: { '@type': 'Offer', price: paper.price, priceCurrency: 'INR', availability: paper.available ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder', url: `${origin}/paper/${paper.slug}` }
   }).replace(/</g, '\\u003c');
@@ -739,6 +1148,7 @@ async function api(request, env, url) {
     await env.DB.prepare('SELECT 1').first();
     return json({ ok: true, platform: 'cloudflare' });
   }
+  if (request.method === 'GET' && url.pathname === '/api/catalog') return json(await publicCatalog(env));
   if (request.method === 'GET' && url.pathname === '/api/cards') return json({ cards: (await filteredCards(env, url.searchParams)).map(publicCard) });
   if (request.method === 'GET' && url.pathname === '/api/papers') return json({ papers: await filterPapers(env, url.searchParams) });
   const slugMatch = url.pathname.match(/^\/api\/papers\/slug\/([a-z0-9-]+)$/i);
@@ -771,7 +1181,7 @@ async function api(request, env, url) {
   const checkoutMatch = url.pathname.match(/^\/api\/checkout\/([a-z0-9-]+)$/i);
   if (request.method === 'POST' && checkoutMatch) {
     const card = await getCardBySlug(env, checkoutMatch[1]);
-    if (!card?.fileKey || !await env.PAPERS.head(card.fileKey)) return json({ error: 'This paper is not ready for secure purchase yet.' }, 404);
+    if (!card?.fileKey || !cardIsPubliclyVisible(card) || !await env.PAPERS.head(card.fileKey)) return json({ error: 'This paper is not ready for secure purchase yet.' }, 404);
     if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return json({ error: 'Secure payments are not configured yet. The administrator must add Razorpay credentials.' }, 503);
     if (!await checkoutAllowed(request, env)) return json({ error: 'Too many checkout attempts from this connection. Please wait 10 minutes and try again.' }, 429);
     await recordCheckoutAttempt(request, env);
@@ -797,7 +1207,7 @@ async function api(request, env, url) {
       const expected = await hmac(`${input.razorpay_order_id}|${input.razorpay_payment_id}`, env.RAZORPAY_KEY_SECRET);
       if (!order || (order.razorpay_payment_id && order.razorpay_payment_id !== input.razorpay_payment_id) || new Date(order.expires_at).getTime() < Date.now() || !(await secureEqual(input.razorpay_signature || '', expected))) throw new Error('Payment verification failed.');
       const card = await getCard(env, order.card_id);
-      if (!card?.fileKey) throw new Error('The requested PDF is unavailable.');
+      if (!card?.fileKey || !cardIsPubliclyVisible(card)) throw new Error('The requested PDF is unavailable.');
       const payment = await razorpayPayment(env, order, input.razorpay_payment_id);
       await updateOrderStatus(env, order.razorpay_order_id, 'fulfilled', payment.id, true);
       return json({ ok: true, downloadUrl: `/api/download/${await signedDownloadToken(env, card)}`, expiresAt: new Date(Date.now() + DOWNLOAD_DURATION_MS).toISOString() });
@@ -817,7 +1227,7 @@ async function api(request, env, url) {
       if (order.status === 'failed') throw new Error('This payment was not completed.');
       if (!order.razorpay_payment_id) return json({ pending: true, message: 'Payment confirmation is still arriving. Please check again in a minute.' }, 202);
       const card = await getCard(env, order.card_id);
-      if (!card?.fileKey) throw new Error('The requested PDF is unavailable.');
+      if (!card?.fileKey || !cardIsPubliclyVisible(card)) throw new Error('The requested PDF is unavailable.');
       const payment = await razorpayPayment(env, order, order.razorpay_payment_id);
       await updateOrderStatus(env, order.razorpay_order_id, 'fulfilled', payment.id, true);
       return json({ ok: true, downloadUrl: `/api/download/${await signedDownloadToken(env, card)}`, expiresAt: new Date(Date.now() + DOWNLOAD_DURATION_MS).toISOString() });
@@ -826,6 +1236,44 @@ async function api(request, env, url) {
     }
   }
   if (!(await authenticated(request, env))) return json({ error: 'Sign in required.' }, 401);
+  if (request.method === 'GET' && url.pathname === '/api/admin/export') {
+    return json({ version: 4, sections: await readSections(env), cards: await readCards(env) });
+  }
+  if (request.method === 'GET' && url.pathname === '/api/admin/sections') return json({ sections: await readSections(env) });
+  const sectionMatch = url.pathname.match(/^\/api\/admin\/sections\/([A-Za-z0-9-]+)$/);
+  if (request.method === 'GET' && sectionMatch) {
+    const section = await getSection(env, sectionMatch[1]);
+    return section ? json({ section }) : json({ error: 'Catalogue section not found.' }, 404);
+  }
+  if (request.method === 'POST' && url.pathname === '/api/admin/sections') {
+    try {
+      const section = await insertSection(env, await cleanSection(env, await readJson(request)));
+      return json({ section }, 201);
+    } catch (error) { return json({ error: error.message || 'The catalogue section could not be saved.' }, 400); }
+  }
+  if (request.method === 'PUT' && sectionMatch) {
+    try {
+      const existing = await getSection(env, sectionMatch[1]);
+      if (!existing) return json({ error: 'Catalogue section not found.' }, 404);
+      const section = await cleanSection(env, await readJson(request), existing);
+      const changesPublicPath = (existing.isPublished && !section.isPublished) || existing.parentId !== section.parentId;
+      if (changesPublicPath && await sectionHasActivePaidDownloads(env, existing.id)) {
+        return json({ error: 'Keep this section published and in place until active paid download links have expired (up to 24 hours).' }, 409);
+      }
+      return json({ section: await updateSection(env, section) });
+    } catch (error) { return json({ error: error.message || 'The catalogue section could not be updated.' }, 400); }
+  }
+  if (request.method === 'DELETE' && sectionMatch) {
+    const section = await getSection(env, sectionMatch[1]);
+    if (!section) return json({ error: 'Catalogue section not found.' }, 404);
+    const [child, card] = await Promise.all([
+      env.DB.prepare('SELECT 1 FROM catalog_sections WHERE parent_id = ? LIMIT 1').bind(section.id).first(),
+      env.DB.prepare('SELECT 1 FROM cards WHERE section_id = ? LIMIT 1').bind(section.id).first()
+    ]);
+    if (child || card) return json({ error: 'Move or delete this section’s child tiles and cards before deleting it.' }, 409);
+    await env.DB.prepare('DELETE FROM catalog_sections WHERE id = ?').bind(section.id).run();
+    return json({ ok: true });
+  }
   if (request.method === 'GET' && url.pathname === '/api/admin/cards') return json({ cards: await readCards(env) });
   if (request.method === 'GET' && url.pathname === '/api/admin/files') return json({ files: await listPdfFiles(env) });
   if (request.method === 'POST' && url.pathname === '/api/admin/files') {
@@ -873,6 +1321,9 @@ async function api(request, env, url) {
       if (card.fileKey !== existing.fileKey && await hasActivePaidDownload(env, existing.id)) {
         return json({ error: 'Keep this PDF linked until the last paid download link has expired (up to 24 hours).' }, 409);
       }
+      if (((existing.isPublished && !card.isPublished) || existing.sectionId !== card.sectionId) && await hasActivePaidDownload(env, existing.id)) {
+        return json({ error: 'Keep this paid card published in its current catalogue section until active download links have expired (up to 24 hours).' }, 409);
+      }
       return json({ card: await updateCard(env, card) });
     } catch (error) { return json({ error: error.message || 'The study card could not be updated.' }, 400); }
   }
@@ -885,19 +1336,40 @@ async function api(request, env, url) {
     try {
       const input = await readJson(request, 2_000_000);
       const source = Array.isArray(input) ? input : input.cards;
+      const sourceSections = Array.isArray(input) ? undefined : input.sections;
       if (!Array.isArray(source) || source.length > 500) throw new Error('Choose a valid backup with no more than 500 cards.');
+      if (sourceSections !== undefined && (!Array.isArray(sourceSections) || sourceSections.length > 200)) throw new Error('Choose a valid backup with no more than 200 catalogue sections.');
       if (await hasAnyActivePaidDownloads(env)) throw new Error('Wait until active paid download links expire before importing a full card backup.');
       const pdfFiles = new Set(await listPdfFiles(env));
       const usedSlugs = new Set();
+      let sectionContexts;
+      let parsedSections = null;
+      if (sourceSections !== undefined) {
+        const usedSectionSlugs = new Set();
+        parsedSections = sourceSections.map((section) => cleanImportedSection(section, usedSectionSlugs));
+        sectionContexts = importedSectionContexts(parsedSections);
+      } else {
+        sectionContexts = await readSectionContexts(env);
+      }
       const parsed = [];
       for (const item of source) {
-        parsed.push(cleanImportedCard(item, usedSlugs, pdfFiles));
+        parsed.push(cleanImportedCard(item, usedSlugs, pdfFiles, sectionContexts));
       }
       if (new Set(parsed.map((card) => card.id)).size !== parsed.length) throw new Error('The backup contains duplicate card IDs.');
       // Keep a full 500-card import within D1 Free's per-invocation statement limit.
-      // Validation happens above; this is one JSON-bound insert plus the replacement delete.
-      await env.DB.batch([env.DB.prepare('DELETE FROM cards'), bulkCardImportStatement(env, parsed)]);
-      return json({ count: parsed.length });
+      // Validation happens above; JSON-bound inserts keep the replacement within
+      // D1 Free's per-invocation statement limit even for a complete catalogue.
+      if (parsedSections) {
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM cards'),
+          env.DB.prepare('DELETE FROM catalog_sections'),
+          bulkSectionImportStatement(env, parsedSections),
+          bulkCardImportStatement(env, parsed)
+        ]);
+      } else {
+        await env.DB.batch([env.DB.prepare('DELETE FROM cards'), bulkCardImportStatement(env, parsed)]);
+      }
+      return json({ count: parsed.length, sections: parsedSections?.length });
     } catch (error) { return json({ error: error.message || 'The backup could not be imported.' }, 400); }
   }
   return json({ error: 'Not found.' }, 404);

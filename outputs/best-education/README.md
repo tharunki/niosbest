@@ -1,6 +1,6 @@
 # Best Education
 
-Best Education sells protected study PDFs for Classes 10, 11 and 12. It includes a secure admin area, a shared catalogue, Razorpay checkout, private time-limited downloads, and an automatically generated sitemap.
+Best Education sells protected study PDFs for Class 10–12, JEE, NEET and future learning collections. It includes a secure admin area, a shared catalogue, Razorpay checkout, private time-limited downloads, and an automatically generated sitemap.
 
 The recommended live deployment is the **Cloudflare free tier**: static pages are served from Cloudflare's edge, the shared catalogue and orders live in D1, and PDFs are stored in a private R2 bucket. The legacy Node/Render server is retained only for local development and is **not approved for live paid sales**.
 
@@ -19,16 +19,17 @@ Open `http://127.0.0.1:4173/`. Do not open the HTML files with `file://`; authen
 ## Admin workflow
 
 1. Go to `/admin.html` and sign in.
-2. Upload a PDF to the protected library (maximum 25 MB).
-3. Create a study card and choose that uploaded PDF.
-4. Use ₹39 for an individual lesson. Tick **Full-course bundle** and use ₹399 for a bundle.
-5. A card has a working buy button only after it has a protected PDF selected and Razorpay has been configured.
+2. In **Library sections & tiles**, create or edit a top-level collection (for example JEE) and then its child tile (for example Formula Sheets). Publish the collection and tile when students should see them.
+3. Upload a PDF to the protected library (maximum 25 MB).
+4. Create a study card, choose its section or tile, add a free-text subject/topic, and choose the uploaded PDF. Save it as a draft until it is ready, then publish it.
+5. Individual study cards are always ₹39. Tick **Full-course bundle** for ₹399; the server enforces both prices.
+6. A published card has a working buy button only after it has a protected PDF selected and Razorpay has been configured.
 
 Uploaded PDFs are never served as public static files. They are released only after a verified payment through a signed link that expires after 24 hours.
 
 ## Cloudflare deployment (recommended)
 
-This is the version to use for a low-cost launch. The Worker source is in `cloudflare/worker.mjs`; its database migration is in `cloudflare/migrations/0001_initial.sql`. The deployed site must use the contents of `build/` as Cloudflare static assets. Do **not** make the R2 bucket public and do not enable an `r2.dev` public URL for the PDF bucket.
+This is the version to use for a low-cost launch. The Worker source is in `cloudflare/worker.mjs`; apply every migration in `cloudflare/migrations/` in order. The deployed site must use the contents of `build/` as Cloudflare static assets. Do **not** make the R2 bucket public and do not enable an `r2.dev` public URL for the PDF bucket.
 
 1. Install a normal Node.js LTS distribution that includes `npm` and `npx` (the portable Node runtime bundled with some desktop tools does not include them).
 2. Sign in to Cloudflare in a terminal with `npx wrangler login`.

@@ -1,0 +1,34 @@
+/* Library taxonomy controls: kept separate so the core admin stylesheet stays cacheable. */
+.catalog-manager{margin:0 0 20px;padding:0;overflow:hidden}
+.catalog-heading-row{display:flex;align-items:flex-start;justify-content:space-between;gap:28px;padding:23px 23px 20px;border-bottom:1px solid var(--line);background:linear-gradient(115deg,#f7f8ff 0%,#fffdf8 76%)}
+.catalog-heading-row h2{margin:5px 0 0}
+.catalog-intro{max-width:510px;margin:0;color:var(--muted);font-size:13px;line-height:1.55}
+.catalog-layout{display:grid;grid-template-columns:minmax(280px,390px) minmax(0,1fr);gap:0}
+.catalog-form{padding:22px;border-right:1px solid var(--line);background:#fff}
+.catalog-form fieldset,.library-placement{min-width:0;margin:0;padding:0;border:0}
+.catalog-form legend,.library-placement legend{display:block;width:100%;margin:0 0 9px;font:700 17px Fraunces,Georgia,serif;color:var(--ink)}
+.field-intro{margin:0 0 17px}
+.toggle-grid{display:grid;gap:9px;margin:2px 0 17px}
+.toggle-field{display:flex;align-items:flex-start;gap:10px;padding:11px;border:1px solid #d7dfda;border-radius:8px;background:#fbfcfb;color:var(--ink);font-size:13px;cursor:pointer}
+.toggle-field input{width:17px;height:17px;flex:0 0 auto;margin:1px 0 0;accent-color:var(--blue)}
+.toggle-field span{display:grid;gap:3px;line-height:1.25}
+.toggle-field strong{font-size:13px}
+.toggle-field small{color:var(--muted);font-size:12px;font-weight:400;line-height:1.35}
+.catalog-actions{margin-top:2px}
+.catalog-tree{min-width:0;padding:22px;background:#fffdf9}
+.catalog-tree-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;margin:0 0 15px}
+.catalog-tree h3{margin:0;font:700 17px Fraunces,Georgia,serif;color:var(--ink)}
+.catalog-tree .notice{margin:5px 0 0}
+.section-list{display:grid;gap:10px;min-height:48px}
+.section-list:empty::before{content:"Your sections and tiles will appear here after you create them.";display:block;padding:15px;border:1px dashed #bdc8c4;border-radius:8px;color:var(--muted);font-size:13px;line-height:1.45;background:#fff}
+.section-group{display:grid;gap:7px;padding:8px;border:1px solid #e0e6e2;border-radius:9px;background:#fff}
+.section-row{display:flex;align-items:flex-start;gap:10px;padding:9px;border-radius:7px;background:#f8faf9}
+.section-row.section-child{margin-left:22px;background:#f5f7ff;border-left:3px solid #c9d4ff}
+.section-icon{display:grid;place-items:center;flex:0 0 32px;width:32px;height:32px;border-radius:8px;background:#e8ecff;font-size:17px}
+.section-details{min-width:0;display:grid;gap:2px;flex:1;color:var(--ink)}
+.section-details strong{font-size:13px;line-height:1.3}.section-details span,.section-details small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px;line-height:1.3}.section-details small{font-size:11px}
+.section-actions{display:flex;gap:5px;flex:0 0 auto}.section-actions .secondary,.section-actions .remove{padding:6px 8px;font-size:11px}
+.library-placement{margin:0 0 18px;padding:14px;border:1px solid #dbe1fa;border-radius:9px;background:#f8f9ff}
+.library-placement .field:last-of-type{margin-bottom:13px}
+.card-publish-toggle{margin-top:0;background:#fff}
+@media(max-width:760px){.catalog-heading-row{display:block;padding:20px}.catalog-intro{max-width:none;margin-top:13px}.catalog-layout{grid-template-columns:1fr}.catalog-form{border-right:0;border-bottom:1px solid var(--line)}.catalog-tree{padding:20px}.library-placement{padding:13px}.section-row{flex-wrap:wrap}.section-actions{width:100%;margin-left:42px}.section-row.section-child{margin-left:10px}.section-details{min-width:calc(100% - 42px)}}

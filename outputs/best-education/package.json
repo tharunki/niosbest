@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "check": "node --check server.mjs && node --check cloudflare/worker.mjs && node --check build/script.js && node --check build/library.js && node --check build/admin.js && node --check build/paper.js",
+    "check": "node --check server.mjs && node --check cloudflare/worker.mjs && node --check cloudflare/catalog-smoke-test.mjs && node --check build/script.js && node --check build/library.js && node --check build/catalog-browser.js && node --check build/admin.js && node --check build/paper.js",
+    "test:catalog": "node cloudflare/catalog-smoke-test.mjs",
     "cloudflare:deploy": "npx wrangler deploy",
     "cloudflare:migrate": "npx wrangler d1 migrations apply best-education-db --remote"
   }

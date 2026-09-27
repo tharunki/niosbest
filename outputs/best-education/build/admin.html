@@ -6,18 +6,59 @@
   <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="admin.css">
+  <link rel="stylesheet" href="admin-catalog.css">
 </head>
 <body>
   <header class="top"><div class="brand"><img src="logo.png" alt="Best Education logo" width="42" height="42" decoding="async">Best Education</div><a href="index.html">View website →</a></header>
   <main class="wrap">
     <section class="panel login-panel" id="login-view"><p class="eyebrow">Protected administration</p><h1>Admin sign in</h1><p class="notice">Use the private admin password configured on the server.</p><form id="login-form"><label class="field" for="password">Admin password<input id="password" name="password" type="password" autocomplete="current-password" required></label><button class="save" type="submit">Sign in</button></form><p class="notice" id="login-status" role="status" aria-live="polite"></p></section>
     <div id="dashboard" hidden>
-      <div class="head"><div><p class="eyebrow">Content manager</p><h1>Manage study material.</h1></div><p>Add, edit, back up or remove cards for every resource library. Published cards are shared with every visitor.</p></div>
+      <div class="head"><div><p class="eyebrow">Content manager</p><h1>Manage study material.</h1></div><p>Organise every resource in a clear section, tile and study-card hierarchy. Published content is shared with every visitor.</p></div>
+      <section class="panel catalog-manager" aria-labelledby="catalog-heading">
+        <div class="catalog-heading-row">
+          <div>
+            <p class="eyebrow">Your study library</p>
+            <h2 id="catalog-heading">Library sections &amp; tiles</h2>
+          </div>
+          <p class="catalog-intro">Create top-level sections such as Class 10, Class 11, Class 12, JEE or NEET. Add child tiles inside them for Formula Sheets, Cheat Sheets, revision packs and any other collection, then place study cards under the right tile.</p>
+        </div>
+        <div class="catalog-layout">
+          <form id="section-form" class="catalog-form" autocomplete="off">
+            <input id="section-id" name="sectionId" type="hidden">
+            <fieldset>
+              <legend id="section-form-heading">Create a section or tile</legend>
+              <p class="helper field-intro">Leave Parent set to “Top-level library section” for a main area. Select a section to create a tile inside it.</p>
+              <label class="field" for="section-parent">Parent section<select id="section-parent" name="parentId" aria-describedby="section-parent-helper"><option value="">Top-level library section</option></select><small class="helper" id="section-parent-helper">A tile appears inside its selected section; tiles cannot contain further tiles.</small></label>
+              <label class="field" for="section-title">Title<input id="section-title" name="title" required maxlength="80" placeholder="e.g. Formula Sheets"></label>
+              <label class="field" for="section-description">Short description<textarea id="section-description" name="description" maxlength="280" placeholder="A clear one-line description for students"></textarea></label>
+              <label class="field" for="section-icon">Icon<select id="section-icon" name="icon" aria-describedby="section-icon-helper"><option value="📚">📚 Books</option><option value="🎓">🎓 Education</option><option value="🧪">🧪 Science</option><option value="🧮">🧮 Mathematics</option><option value="📐">📐 Formulae</option><option value="📝">📝 Practice</option><option value="⚡">⚡ Revision</option><option value="🧠">🧠 Concepts</option><option value="🎯">🎯 Exam prep</option></select><small class="helper" id="section-icon-helper">Choose from the safe built-in icons so the library stays consistent.</small></label>
+              <label class="field" for="section-order">Display order<input id="section-order" name="sortOrder" type="number" min="0" max="9999" step="1" value="0" inputmode="numeric"><small class="helper">Lower numbers appear first.</small></label>
+              <div class="toggle-grid" aria-label="Section visibility">
+                <label class="toggle-field" for="section-published"><input id="section-published" name="isPublished" type="checkbox" checked><span><strong>Published</strong><small>Visible to students when its parent is published.</small></span></label>
+                <label class="toggle-field" for="section-home"><input id="section-home" name="showOnHome" type="checkbox"><span><strong>Show on home</strong><small id="section-home-helper">Feature this top-level section on the homepage.</small></span></label>
+              </div>
+            </fieldset>
+            <div class="actions catalog-actions"><button class="save" id="section-submit" type="submit">Create section</button><button class="secondary" id="section-cancel" type="button" hidden>Cancel edit</button></div>
+          </form>
+          <section class="catalog-tree" aria-labelledby="section-list-heading">
+            <div class="catalog-tree-heading"><div><h3 id="section-list-heading">Current library structure</h3><p class="notice">Edit a section or tile whenever you need to update its wording, order or student visibility.</p></div></div>
+            <div id="section-list" class="section-list" role="region" aria-live="polite" aria-labelledby="section-list-heading"></div>
+          </section>
+        </div>
+      </section>
       <div class="layout">
         <section class="panel"><h2 id="form-heading">New study card</h2><form id="card-form">
-          <label class="field" for="type">Material type<select id="type" name="type"><option value="sample">Sample Papers</option><option value="pyq">PYQs</option><option value="mcq">MCQs</option><option value="important">Important Questions</option></select></label>
-          <label class="field" for="className">Class<select id="className" name="className"><option value="10">Class 10</option><option value="11">Class 11</option><option value="12">Class 12</option></select></label>
-          <label class="field" for="subject">Subject<select id="subject" name="subject"></select></label>
+          <fieldset class="library-placement">
+            <legend>Library placement</legend>
+            <p class="helper field-intro">Put this card under a section or child tile you created above. It will still keep its legacy category settings below for Sample Papers, PYQs, MCQs and Important Questions.</p>
+            <label class="field" for="card-section">Section or tile<select id="card-section" name="sectionId" aria-describedby="card-section-helper"><option value="">Legacy category pages only</option></select><small class="helper" id="card-section-helper">Choose a tile for the clearest student journey, such as Class 12 → Formula Sheets.</small></label>
+            <label class="field" for="resource-label">Resource label (optional)<input id="resource-label" name="resourceLabel" maxlength="80" placeholder="e.g. Quick revision PDF"><small class="helper">Shown as a small label above this study card in the library.</small></label>
+            <label class="field" for="sort-order">Display order<input id="sort-order" name="sortOrder" type="number" min="0" max="9999" step="1" value="0" inputmode="numeric"><small class="helper">Lower numbers appear first within the selected tile.</small></label>
+            <label class="toggle-field card-publish-toggle" for="is-published"><input id="is-published" name="isPublished" type="checkbox" checked><span><strong>Published for students</strong><small>Turn this off to save a private draft while you prepare the PDF.</small></span></label>
+          </fieldset>
+          <label class="field" for="type">Legacy material type<select id="type" name="type"><option value="sample">Sample Papers</option><option value="pyq">PYQs</option><option value="mcq">MCQs</option><option value="important">Important Questions</option></select><small class="helper">Used by the original category pages. A card placed in a library tile uses that tile’s title for students.</small></label>
+          <label class="field" for="className">Legacy class<select id="className" name="className"><option value="10">Class 10</option><option value="11">Class 11</option><option value="12">Class 12</option></select><small class="helper">For JEE, NEET and custom collections, choose the tile above; its collection controls the student-facing label.</small></label>
+          <label class="field" for="subject">Subject or topic<input id="subject" name="subject" list="subject-suggestions" required maxlength="80" placeholder="e.g. Physics or Organic Chemistry"><datalist id="subject-suggestions"></datalist><small class="helper">Type any subject or topic. Class suggestions appear while you type.</small></label>
           <label class="field" for="title">Card title<input id="title" name="title" required maxlength="140" placeholder="e.g. Electricity: 50 MCQs"></label>
           <label class="field" for="description">Short description<textarea id="description" name="description" maxlength="500" placeholder="What students will receive"></textarea></label>
           <label class="field" for="price">Fixed price in ₹<input id="price" name="price" type="text" value="39" readonly aria-describedby="price-helper"><small class="helper" id="price-helper">Individual study cards are always ₹39. The server checks this again before saving.</small></label>
