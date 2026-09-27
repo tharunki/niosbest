@@ -100,7 +100,7 @@ function secureStaticPage(response, request) {
 function cacheStaticAsset(response, request) {
   const headers = new Headers(response.headers);
   const pathname = new URL(request.url).pathname;
-  if (/\.(?:css|js|png|jpe?g|webp|avif|svg|ico|woff2?)$/i.test(pathname)) {
+  if (response.ok && /\.(?:css|js|png|jpe?g|webp|avif|svg|ico|woff2?)$/i.test(pathname)) {
     headers.set('Cache-Control', 'public, max-age=3600');
   }
   if (isWorkersDev(request.url)) headers.set('X-Robots-Tag', 'noindex, nofollow');
