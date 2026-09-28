@@ -8,6 +8,9 @@ const MAX_LOGIN_ATTEMPTS = 5;
 const CHECKOUT_WINDOW_MS = 10 * 60 * 1000;
 const MAX_CHECKOUT_ATTEMPTS = 12;
 const MAX_PDF_BYTES = 25 * 1024 * 1024;
+const MAX_JSON_BYTES = 1_000_000;
+const MAX_WEBHOOK_BYTES = 1_000_000;
+const RAZORPAY_TIMEOUT_MS = 8_000;
 const INDIVIDUAL_CARD_PRICE = 39;
 const FULL_COURSE_BUNDLE_PRICE = 399;
 const ALLOWED_TYPES = new Set(['sample', 'pyq', 'mcq', 'important']);
@@ -24,7 +27,20 @@ const scienceLessons = [
   'Our Environment', 'Sustainable Management of Natural Resources'
 ];
 
-const staticPagePaths = new Set(['/', '/index.html', '/admin.html', '/library.html', '/sample-papers.html', '/pyqs.html', '/mcqs.html', '/important-questions.html']);
+const staticPageAliases = new Map([
+  ['/', '/index.html'],
+  ['/index', '/index.html'],
+  ['/admin', '/admin.html'],
+  ['/library', '/library.html'],
+  ['/sample-papers', '/sample-papers.html'],
+  ['/pyqs', '/pyqs.html'],
+  ['/mcqs', '/mcqs.html'],
+  ['/important-questions', '/important-questions.html']
+]);
+const staticPagePaths = new Set([
+  ...staticPageAliases.keys(),
+  ...staticPageAliases.values()
+]);
 
 function securityHeaders(contentType = 'application/json; charset=utf-8') {
   return {
@@ -52,10 +68,29 @@ function text(body, status = 200, contentType = 'text/plain; charset=utf-8', ext
   });
 }
 
+function methodNotAllowed(allowed) {
+  return json({ error: 'Method not allowed.' }, 405, { Allow: allowed });
+}
+
 class PaperStorageUnavailableError extends Error {
   constructor() {
     super(PAPER_STORAGE_UNAVAILABLE);
     this.name = 'PaperStorageUnavailableError';
+  }
+}
+
+class RequestBodyError extends Error {
+  constructor(message, status = 400) {
+    super(message);
+    this.name = 'RequestBodyError';
+    this.status = status;
+  }
+}
+
+class UpstreamServiceError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'UpstreamServiceError';
   }
 }
 
@@ -82,6 +117,8 @@ function paperStorageUnavailableResponse() {
 
 function apiErrorResponse(error, fallback, status = 400) {
   if (error instanceof PaperStorageUnavailableError) return paperStorageUnavailableResponse();
+  if (error instanceof RequestBodyError) return json({ error: error.message }, error.status);
+  if (error instanceof UpstreamServiceError) return json({ error: error.message }, 502);
   return json({ error: error instanceof Error && error.message ? error.message : fallback }, status);
 }
 
@@ -187,13 +224,25 @@ async function secureEqual(left, right) {
   return difference === 0;
 }
 
+function decodeCookiePart(value) {
+  try { return decodeURIComponent(value); } catch { return null; }
+}
+
 function parseCookies(request) {
-  const header = request.headers.get('Cookie') || '';
-  return Object.fromEntries(header.split(';').map((part) => part.trim()).filter(Boolean).map((part) => {
-    const index = part.indexOf('=');
-    if (index < 0) return [part, ''];
-    return [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
-  }));
+  const cookies = {};
+  for (const part of (request.headers.get('Cookie') || '').split(';')) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const index = trimmed.indexOf('=');
+    const rawName = index < 0 ? trimmed : trimmed.slice(0, index);
+    const rawValue = index < 0 ? '' : trimmed.slice(index + 1);
+    const name = decodeCookiePart(rawName);
+    const value = decodeCookiePart(rawValue);
+    // An unrelated malformed cookie must not turn an admin/session request into
+    // a 500 response. Ignore just that cookie instead.
+    if (name && value !== null) cookies[name] = value;
+  }
+  return cookies;
 }
 
 function validSameOrigin(request) {
@@ -201,12 +250,53 @@ function validSameOrigin(request) {
   return !origin || origin === new URL(request.url).origin;
 }
 
-async function readJson(request, maxBytes = 1_000_000) {
-  const contentLength = Number(request.headers.get('Content-Length') || 0);
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) throw new Error('Request too large');
-  const bytes = await request.arrayBuffer();
-  if (bytes.byteLength > maxBytes) throw new Error('Request too large');
-  return bytes.byteLength ? JSON.parse(decoder.decode(bytes)) : {};
+function declaredContentLength(request) {
+  const raw = request.headers.get('Content-Length');
+  if (!raw || !/^\d+$/.test(raw.trim())) return 0;
+  const length = Number(raw);
+  return Number.isSafeInteger(length) ? length : Infinity;
+}
+
+async function readBodyBytes(request, maxBytes) {
+  if (declaredContentLength(request) > maxBytes) {
+    throw new RequestBodyError(`Request body must be at most ${Math.floor(maxBytes / 1_000_000)} MB.`, 413);
+  }
+  if (!request.body) return new Uint8Array();
+  const reader = request.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+      size += chunk.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new RequestBodyError(`Request body must be at most ${Math.floor(maxBytes / 1_000_000)} MB.`, 413);
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+async function readJson(request, maxBytes = MAX_JSON_BYTES) {
+  const bytes = await readBodyBytes(request, maxBytes);
+  if (!bytes.byteLength) return {};
+  try {
+    return JSON.parse(decoder.decode(bytes));
+  } catch {
+    throw new RequestBodyError('Invalid JSON request body.');
+  }
 }
 
 function isFullCourseBundle(value) {
@@ -327,6 +417,14 @@ async function readCards(env) {
   return (result.results || []).map(rowToCard);
 }
 
+// Public pages should never fetch drafts and discard them in JavaScript. Apart
+// from protecting unpublished work, this lets D1 use the public-listing index
+// when the catalogue grows.
+async function readPublicCards(env) {
+  const result = await env.DB.prepare(cardSelectSql(publicCardVisibilityClause(), 'c.sort_order ASC, c.updated_at DESC', '5000')).all();
+  return (result.results || []).map(rowToCard);
+}
+
 async function getCard(env, id) {
   const row = await env.DB.prepare(cardSelectSql('c.id = ?', 'c.updated_at DESC', '1')).bind(id).first();
   return row ? rowToCard(row) : null;
@@ -338,8 +436,8 @@ async function getCardBySlug(env, slug) {
 }
 
 async function getPublicCardBySlug(env, slug) {
-  const card = await getCardBySlug(env, slug);
-  return card && cardIsPubliclyVisible(card) ? card : null;
+  const row = await env.DB.prepare(cardSelectSql(`c.slug = ? AND ${publicCardVisibilityClause()}`, 'c.updated_at DESC', '1')).bind(slug).first();
+  return row ? rowToCard(row) : null;
 }
 
 async function slugAvailable(env, slug, existingId) {
@@ -779,7 +877,7 @@ function seedPapers() {
 
 async function allPapers(env) {
   const storageReady = hasPaperStorage(env);
-  const cards = (await readCards(env)).filter(cardIsPubliclyVisible).map((card) => publicCard(card, storageReady));
+  const cards = (await readPublicCards(env)).map((card) => publicCard(card, storageReady));
   const cardSlugs = new Set(cards.map((card) => card.slug));
   return [...cards, ...seedPapers().filter((paper) => !cardSlugs.has(paper.slug))];
 }
@@ -904,7 +1002,7 @@ async function publicCatalog(env) {
     }
   }
   const unsectionedCards = [];
-  for (const card of (await readCards(env)).filter(cardIsPubliclyVisible)) {
+  for (const card of await readPublicCards(env)) {
     const target = card.sectionId ? nodes.get(card.sectionId) : null;
     if (target) target.cards.push(publicCard(card, storageReady));
     else if (!card.sectionId) unsectionedCards.push(publicCard(card, storageReady));
@@ -1012,8 +1110,20 @@ function razorpayAuthorization(env) {
   return `Basic ${btoa(`${env.RAZORPAY_KEY_ID}:${env.RAZORPAY_KEY_SECRET}`)}`;
 }
 
+async function razorpayFetch(url, init) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RAZORPAY_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch {
+    throw new UpstreamServiceError('The payment service is unavailable right now. Please try again in a moment.');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function razorpayPayment(env, order, paymentId) {
-  const upstream = await fetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentId)}`, {
+  const upstream = await razorpayFetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentId)}`, {
     headers: { Authorization: razorpayAuthorization(env) }
   });
   const payment = await upstream.json().catch(() => ({}));
@@ -1027,15 +1137,15 @@ async function razorpayPayment(env, order, paymentId) {
 async function paymentWebhook(request, env) {
   if (!env.RAZORPAY_WEBHOOK_SECRET) return json({ error: 'Webhook endpoint is not configured.' }, 404);
   try {
-    const raw = await request.arrayBuffer();
-    if (raw.byteLength > 1_000_000) return json({ error: 'Webhook payload is too large.' }, 413);
+    const raw = await readBodyBytes(request, MAX_WEBHOOK_BYTES);
     const signature = request.headers.get('X-Razorpay-Signature') || '';
-    const expected = await hmac(new Uint8Array(raw), env.RAZORPAY_WEBHOOK_SECRET);
+    const expected = await hmac(raw, env.RAZORPAY_WEBHOOK_SECRET);
     if (!(await secureEqual(signature, expected))) return json({ error: 'Invalid webhook signature.' }, 400);
     // Ask Razorpay to retry a valid event rather than marking a payment as
     // fulfilled while the secure file store is not available.
     if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
-    const event = JSON.parse(decoder.decode(raw));
+    let event;
+    try { event = JSON.parse(decoder.decode(raw)); } catch { throw new RequestBodyError('Invalid webhook payload.'); }
     const payment = event?.payload?.payment?.entity;
     if (!payment?.order_id) return json({ ok: true });
     const order = await getOrder(env, payment.order_id);
@@ -1045,7 +1155,8 @@ async function paymentWebhook(request, env) {
     }
     if (event.event === 'payment.failed') await updateOrderStatus(env, payment.order_id, 'failed', payment.id);
     return json({ ok: true });
-  } catch {
+  } catch (error) {
+    if (error instanceof RequestBodyError) return apiErrorResponse(error, 'Invalid webhook payload.');
     return json({ error: 'Invalid webhook payload.' }, 400);
   }
 }
@@ -1055,47 +1166,48 @@ async function authenticated(request, env) {
   if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
   const tokenHash = await sha256Hex(token);
   const session = await env.DB.prepare('SELECT expires_at FROM admin_sessions WHERE token_hash = ?').bind(tokenHash).first();
-  if (!session || Number(session.expires_at) < Date.now()) {
+  const now = Date.now();
+  const expiresAt = Number(session?.expires_at);
+  if (!session || !Number.isFinite(expiresAt) || expiresAt < now) {
     if (session) await env.DB.prepare('DELETE FROM admin_sessions WHERE token_hash = ?').bind(tokenHash).run();
     return false;
   }
-  await env.DB.prepare('UPDATE admin_sessions SET expires_at = ? WHERE token_hash = ?').bind(Date.now() + SESSION_DURATION_MS, tokenHash).run();
+  // A dashboard can poll several endpoints. Renewing on every request turns
+  // those reads into D1 writes, so renew only once the session is halfway old.
+  if (expiresAt - now <= SESSION_DURATION_MS / 2) {
+    await env.DB.prepare('UPDATE admin_sessions SET expires_at = ? WHERE token_hash = ?').bind(now + SESSION_DURATION_MS, tokenHash).run();
+  }
   return true;
 }
 
-async function loginAllowed(request, env) {
-  const ipHash = await sha256Hex(request.headers.get('CF-Connecting-IP') || 'unknown');
-  const attempt = await env.DB.prepare('SELECT count, window_started_at FROM login_attempts WHERE client_hash = ?').bind(ipHash).first();
-  return !attempt || Date.now() - Number(attempt.window_started_at) >= LOGIN_WINDOW_MS || Number(attempt.count) < MAX_LOGIN_ATTEMPTS;
+async function clientHash(request) {
+  return sha256Hex(request.headers.get('CF-Connecting-IP') || 'unknown');
+}
+
+async function consumeRateLimit(request, env, table, windowMs, maxAttempts) {
+  if (table !== 'login_attempts' && table !== 'checkout_attempts') throw new Error('Invalid rate limit table.');
+  const ipHash = await clientHash(request);
+  const now = Date.now();
+  const cutoff = now - windowMs;
+  // The WHERE clause makes the mutation itself the admission decision. A
+  // request that arrives after the limit is reached returns no row, so parallel
+  // requests cannot all pass a separate read-before-write check.
+  const attempt = await env.DB.prepare(`INSERT INTO ${table} (client_hash,count,window_started_at) VALUES (?,?,?)
+    ON CONFLICT(client_hash) DO UPDATE SET count=CASE WHEN ${table}.window_started_at < ? THEN 1 ELSE ${table}.count + 1 END,
+    window_started_at=CASE WHEN ${table}.window_started_at < ? THEN excluded.window_started_at ELSE ${table}.window_started_at END
+    WHERE ${table}.window_started_at < ? OR ${table}.count < ?
+    RETURNING count, window_started_at`)
+    .bind(ipHash, 1, now, cutoff, cutoff, cutoff, maxAttempts).first();
+  return Boolean(attempt);
 }
 
 async function recordFailedLogin(request, env) {
-  const ipHash = await sha256Hex(request.headers.get('CF-Connecting-IP') || 'unknown');
-  const now = Date.now();
-  await env.DB.prepare(`INSERT INTO login_attempts (client_hash,count,window_started_at) VALUES (?,?,?)
-    ON CONFLICT(client_hash) DO UPDATE SET count=CASE WHEN login_attempts.window_started_at < ? THEN 1 ELSE login_attempts.count + 1 END,
-    window_started_at=CASE WHEN login_attempts.window_started_at < ? THEN ? ELSE login_attempts.window_started_at END`)
-    .bind(ipHash, 1, now, now - LOGIN_WINDOW_MS, now - LOGIN_WINDOW_MS, now).run();
+  return consumeRateLimit(request, env, 'login_attempts', LOGIN_WINDOW_MS, MAX_LOGIN_ATTEMPTS);
 }
 
 async function clearLoginAttempts(request, env) {
-  const ipHash = await sha256Hex(request.headers.get('CF-Connecting-IP') || 'unknown');
+  const ipHash = await clientHash(request);
   await env.DB.prepare('DELETE FROM login_attempts WHERE client_hash = ?').bind(ipHash).run();
-}
-
-async function checkoutAllowed(request, env) {
-  const ipHash = await sha256Hex(request.headers.get('CF-Connecting-IP') || 'unknown');
-  const attempt = await env.DB.prepare('SELECT count, window_started_at FROM checkout_attempts WHERE client_hash = ?').bind(ipHash).first();
-  return !attempt || Date.now() - Number(attempt.window_started_at) >= CHECKOUT_WINDOW_MS || Number(attempt.count) < MAX_CHECKOUT_ATTEMPTS;
-}
-
-async function recordCheckoutAttempt(request, env) {
-  const ipHash = await sha256Hex(request.headers.get('CF-Connecting-IP') || 'unknown');
-  const now = Date.now();
-  await env.DB.prepare(`INSERT INTO checkout_attempts (client_hash,count,window_started_at) VALUES (?,?,?)
-    ON CONFLICT(client_hash) DO UPDATE SET count=CASE WHEN checkout_attempts.window_started_at < ? THEN 1 ELSE checkout_attempts.count + 1 END,
-    window_started_at=CASE WHEN checkout_attempts.window_started_at < ? THEN ? ELSE checkout_attempts.window_started_at END`)
-    .bind(ipHash, 1, now, now - CHECKOUT_WINDOW_MS, now - CHECKOUT_WINDOW_MS, now).run();
 }
 
 function adminCookie(token, maxAge, secure) {
@@ -1149,7 +1261,11 @@ function isWorkersDev(url) {
 }
 
 async function renderStaticPage(request, env) {
-  return secureStaticPage(await env.ASSETS.fetch(request), request);
+  const assetUrl = new URL(request.url);
+  const aliasTarget = staticPageAliases.get(assetUrl.pathname);
+  if (aliasTarget) assetUrl.pathname = aliasTarget;
+  const assetRequest = aliasTarget ? new Request(assetUrl.toString(), request) : request;
+  return secureStaticPage(await env.ASSETS.fetch(assetRequest), request);
 }
 
 async function renderSitemap(request, env) {
@@ -1159,7 +1275,7 @@ async function renderSitemap(request, env) {
   // Do not publish product URLs to search engines until protected storage is
   // connected and the PDF could actually be delivered after payment.
   const cards = hasPaperStorage(env)
-    ? (await readCards(env)).filter((card) => card.fileKey && cardIsPubliclyVisible(card))
+    ? (await readPublicCards(env)).filter((card) => card.fileKey)
     : [];
   const cardUrls = cards.map((card) => `  <url><loc>${escapeXml(`${origin}/paper/${card.slug}`)}</loc><lastmod>${card.updatedAt.slice(0, 10)}</lastmod></url>`);
   return text(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${[...fixed, ...cardUrls].join('\n')}\n</urlset>\n`, 200, 'application/xml; charset=utf-8');
@@ -1202,10 +1318,24 @@ async function renderPaperPage(request, env, slug) {
 
 async function api(request, env, url) {
   if (request.method === 'POST' && url.pathname === '/api/payment/webhook') return paymentWebhook(request, env);
+  if (!['GET', 'POST', 'PUT', 'DELETE'].includes(request.method)) return methodNotAllowed('GET, POST, PUT, DELETE');
   if (!validSameOrigin(request)) return json({ error: 'Invalid origin.' }, 403);
   if (request.method === 'GET' && url.pathname === '/healthz') {
-    await env.DB.prepare('SELECT 1').first();
-    return json({ ok: true, platform: 'cloudflare' });
+    try {
+      // Check the tables used by the live paths, not just the D1 connection.
+      // A deployment without the latest migration must fail health checks.
+      await Promise.all([
+        env.DB.prepare('SELECT 1 FROM cards LIMIT 1').first(),
+        env.DB.prepare('SELECT 1 FROM catalog_sections LIMIT 1').first(),
+        env.DB.prepare('SELECT 1 FROM orders LIMIT 1').first(),
+        env.DB.prepare('SELECT 1 FROM admin_sessions LIMIT 1').first(),
+        env.DB.prepare('SELECT 1 FROM checkout_attempts LIMIT 1').first()
+      ]);
+      return json({ ok: true, platform: 'cloudflare' });
+    } catch (error) {
+      console.error('Best Education database health check failed', error);
+      return json({ ok: false, error: 'Database migration or connection is unavailable.' }, 503);
+    }
   }
   if (request.method === 'GET' && url.pathname === '/api/catalog') return json(await publicCatalog(env));
   if (request.method === 'GET' && url.pathname === '/api/cards') {
@@ -1223,10 +1353,11 @@ async function api(request, env, url) {
   if (request.method === 'GET' && url.pathname === '/api/admin/session') return json({ authenticated: await authenticated(request, env) });
   if (request.method === 'POST' && url.pathname === '/api/admin/login') {
     if (!env.ADMIN_PASSWORD || String(env.ADMIN_PASSWORD).length < 12) return json({ error: 'Admin authentication is not configured yet.' }, 503);
-    if (!(await loginAllowed(request, env))) return json({ error: 'Too many attempts. Try again later.' }, 429);
-    const input = await readJson(request).catch(() => ({}));
+    let input;
+    try { input = await readJson(request); }
+    catch (error) { return apiErrorResponse(error, 'Invalid sign-in request.'); }
     if (!(await secureEqual(input.password || '', env.ADMIN_PASSWORD))) {
-      await recordFailedLogin(request, env);
+      if (!await recordFailedLogin(request, env)) return json({ error: 'Too many attempts. Try again later.' }, 429);
       return json({ error: 'Incorrect password.' }, 401);
     }
     await clearLoginAttempts(request, env);
@@ -1246,15 +1377,19 @@ async function api(request, env, url) {
     const card = await getCardBySlug(env, checkoutMatch[1]);
     if (!card?.fileKey || !cardIsPubliclyVisible(card) || !await env.PAPERS.head(card.fileKey)) return json({ error: 'This paper is not ready for secure purchase yet.' }, 404);
     if (!env.RAZORPAY_KEY_ID || !env.RAZORPAY_KEY_SECRET) return json({ error: 'Secure payments are not configured yet. The administrator must add Razorpay credentials.' }, 503);
-    if (!await checkoutAllowed(request, env)) return json({ error: 'Too many checkout attempts from this connection. Please wait 10 minutes and try again.' }, 429);
-    await recordCheckoutAttempt(request, env);
+    if (!await consumeRateLimit(request, env, 'checkout_attempts', CHECKOUT_WINDOW_MS, MAX_CHECKOUT_ATTEMPTS)) return json({ error: 'Too many checkout attempts from this connection. Please wait 10 minutes and try again.' }, 429);
     const receipt = `best_${crypto.randomUUID().replace(/-/g, '').slice(0, 30)}`;
     const amount = fixedCardPrice(card.isBundle) * 100;
-    const upstream = await fetch('https://api.razorpay.com/v1/orders', {
-      method: 'POST',
-      headers: { Authorization: razorpayAuthorization(env), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount, currency: 'INR', receipt, notes: { card_id: card.id, slug: card.slug } })
-    });
+    let upstream;
+    try {
+      upstream = await razorpayFetch('https://api.razorpay.com/v1/orders', {
+        method: 'POST',
+        headers: { Authorization: razorpayAuthorization(env), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amount, currency: 'INR', receipt, notes: { card_id: card.id, slug: card.slug } })
+      });
+    } catch (error) {
+      return apiErrorResponse(error, 'The payment service could not create an order. Please try again.', 502);
+    }
     const order = await upstream.json().catch(() => ({}));
     if (!upstream.ok || !order.id || Number(order.amount) !== amount || (order.currency && order.currency !== 'INR')) return json({ error: 'The payment service could not create an order. Please try again.' }, 502);
     const recoveryToken = bytesToBase64(crypto.getRandomValues(new Uint8Array(32))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
@@ -1275,9 +1410,7 @@ async function api(request, env, url) {
       const payment = await razorpayPayment(env, order, input.razorpay_payment_id);
       await updateOrderStatus(env, order.razorpay_order_id, 'fulfilled', payment.id, true);
       return json({ ok: true, downloadUrl: `/api/download/${await signedDownloadToken(env, card)}`, expiresAt: new Date(Date.now() + DOWNLOAD_DURATION_MS).toISOString() });
-    } catch (error) {
-      return json({ error: error.message || 'Payment verification failed.' }, 400);
-    }
+    } catch (error) { return apiErrorResponse(error, 'Payment verification failed.'); }
   }
   if (request.method === 'POST' && url.pathname === '/api/payment/recover') {
     if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
@@ -1296,9 +1429,7 @@ async function api(request, env, url) {
       const payment = await razorpayPayment(env, order, order.razorpay_payment_id);
       await updateOrderStatus(env, order.razorpay_order_id, 'fulfilled', payment.id, true);
       return json({ ok: true, downloadUrl: `/api/download/${await signedDownloadToken(env, card)}`, expiresAt: new Date(Date.now() + DOWNLOAD_DURATION_MS).toISOString() });
-    } catch (error) {
-      return json({ error: error.message || 'Purchase recovery failed.' }, 400);
-    }
+    } catch (error) { return apiErrorResponse(error, 'Purchase recovery failed.'); }
   }
   if (!(await authenticated(request, env))) return json({ error: 'Sign in required.' }, 401);
   if (request.method === 'GET' && url.pathname === '/api/admin/export') {
@@ -1314,7 +1445,7 @@ async function api(request, env, url) {
     try {
       const section = await insertSection(env, await cleanSection(env, await readJson(request)));
       return json({ section }, 201);
-    } catch (error) { return json({ error: error.message || 'The catalogue section could not be saved.' }, 400); }
+    } catch (error) { return apiErrorResponse(error, 'The catalogue section could not be saved.'); }
   }
   if (request.method === 'PUT' && sectionMatch) {
     try {
@@ -1326,7 +1457,7 @@ async function api(request, env, url) {
         return json({ error: 'Keep this section published and in place until active paid download links have expired (up to 24 hours).' }, 409);
       }
       return json({ section: await updateSection(env, section) });
-    } catch (error) { return json({ error: error.message || 'The catalogue section could not be updated.' }, 400); }
+    } catch (error) { return apiErrorResponse(error, 'The catalogue section could not be updated.'); }
   }
   if (request.method === 'DELETE' && sectionMatch) {
     const section = await getSection(env, sectionMatch[1]);
@@ -1452,6 +1583,7 @@ export default {
     try {
       const url = new URL(request.url);
       if (url.pathname.startsWith('/api/') || url.pathname === '/healthz') return await api(request, env, url);
+      if (!['GET', 'HEAD'].includes(request.method)) return methodNotAllowed('GET, HEAD');
       if (url.pathname === '/sitemap.xml') return await renderSitemap(request, env);
       if (url.pathname === '/robots.txt') return renderRobots(request);
       const paperMatch = url.pathname.match(/^\/paper\/([a-z0-9-]+)$/i);

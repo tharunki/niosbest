@@ -26,7 +26,7 @@ class D1Database {
 }
 
 const sqlite = new DatabaseSync(':memory:');
-for (const migration of ['0001_initial.sql', '0002_checkout_rate_limit.sql', '0003_cards_fts.sql', '0004_catalog_sections.sql']) {
+for (const migration of ['0001_initial.sql', '0002_checkout_rate_limit.sql', '0003_cards_fts.sql', '0004_catalog_sections.sql', '0005_public_and_purchase_indexes.sql']) {
   sqlite.exec(readFileSync(new URL(`./migrations/${migration}`, import.meta.url), 'utf8'));
 }
 
@@ -60,7 +60,52 @@ const login = await call(jsonRequest('/api/admin/login', { password: env.ADMIN_P
 assert.equal(login.status, 200);
 const cookie = login.headers.get('set-cookie').split(';')[0];
 
-let response = await call(adminRequest('/api/admin/sections', 'POST', {
+const originalSessionExpiry = sqlite.prepare('SELECT expires_at FROM admin_sessions').get().expires_at;
+let response = await call(adminRequest('/api/admin/session', 'GET', undefined, cookie));
+assert.equal(response.status, 200);
+assert.equal(sqlite.prepare('SELECT expires_at FROM admin_sessions').get().expires_at, originalSessionExpiry, 'a fresh admin session must not write to D1 on every request');
+sqlite.prepare('UPDATE admin_sessions SET expires_at = ?').run(Date.now() + 1_000);
+response = await call(adminRequest('/api/admin/session', 'GET', undefined, cookie));
+assert.equal(response.status, 200);
+assert.ok(sqlite.prepare('SELECT expires_at FROM admin_sessions').get().expires_at > Date.now() + 10 * 60 * 60 * 1_000, 'a near-expiry admin session must be renewed');
+
+response = await call(new Request(`${origin}/api/catalog`, { method: 'PATCH' }));
+assert.equal(response.status, 405, 'unsupported API methods must be rejected predictably');
+assert.equal(response.headers.get('allow'), 'GET, POST, PUT, DELETE');
+response = await call(new Request(`${origin}/`, { method: 'POST' }));
+assert.equal(response.status, 405, 'static routes accept only GET and HEAD');
+assert.equal(response.headers.get('allow'), 'GET, HEAD');
+const requestedStaticAssets = [];
+const staticEnv = { ASSETS: { async fetch(request) {
+  requestedStaticAssets.push(new URL(request.url).pathname);
+  return new Response('<!doctype html>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+} } };
+for (const [alias, target] of [
+  ['/', '/index.html'], ['/index', '/index.html'], ['/admin', '/admin.html'], ['/library', '/library.html'],
+  ['/sample-papers', '/sample-papers.html'], ['/pyqs', '/pyqs.html'], ['/mcqs', '/mcqs.html'], ['/important-questions', '/important-questions.html']
+]) {
+  response = await worker.fetch(new Request(`${origin}${alias}`), staticEnv);
+  assert.equal(response.status, 200, `${alias} must be served without a redirect`);
+  assert.equal(requestedStaticAssets.at(-1), target, `${alias} must resolve to its HTML page`);
+}
+response = await call(new Request(`${origin}/api/admin/session`, { headers: { Cookie: 'unrelated=%E0%A4%A' } }));
+assert.equal(response.status, 200, 'a malformed unrelated cookie must not crash the request');
+assert.equal((await response.json()).authenticated, false);
+
+response = await call(adminRequest('/api/admin/cards', 'POST', { title: 'x'.repeat(1_000_001) }, cookie));
+assert.equal(response.status, 413, 'oversized JSON is rejected while streaming before any card write');
+response = await call(new Request(`${origin}/healthz`));
+assert.equal(response.status, 200, 'health checks verify all live D1 tables');
+const originalConsoleError = console.error;
+console.error = () => {};
+try {
+  response = await worker.fetch(new Request(`${origin}/healthz`), { ...env, DB: { prepare() { throw new Error('missing migration'); } } });
+  assert.equal(response.status, 503, 'health checks fail closed when D1 migrations are missing');
+} finally {
+  console.error = originalConsoleError;
+}
+
+response = await call(adminRequest('/api/admin/sections', 'POST', {
   title: 'Formula Cheat Sheets', parentId: 'jee', isPublished: true, sortOrder: 10
 }, cookie));
 assert.equal(response.status, 201);
@@ -102,6 +147,23 @@ response = await call(adminRequest('/api/admin/cards', 'POST', {
 }, cookie));
 assert.equal(response.status, 201);
 const paidCard = (await response.json()).card;
+
+const checkoutEnv = { ...env, RAZORPAY_KEY_ID: 'rzp_test_checkout', RAZORPAY_KEY_SECRET: 'checkout-secret' };
+const originalFetch = globalThis.fetch;
+let fakeOrderNumber = 0;
+globalThis.fetch = async () => new Response(JSON.stringify({ id: `order_test_${++fakeOrderNumber}`, amount: 3900, currency: 'INR' }), {
+  status: 200,
+  headers: { 'Content-Type': 'application/json' }
+});
+try {
+  const checkoutRequests = await Promise.all(Array.from({ length: 13 }, () => worker.fetch(new Request(`${origin}/api/checkout/${paidCard.slug}`, {
+    method: 'POST', headers: { 'CF-Connecting-IP': '203.0.113.250' }
+  }), checkoutEnv)));
+  assert.equal(checkoutRequests.filter((item) => item.status === 200).length, 12, 'parallel checkout requests can consume only the configured quota');
+  assert.equal(checkoutRequests.filter((item) => item.status === 429).length, 1, 'the first checkout request beyond the quota is denied atomically');
+} finally {
+  globalThis.fetch = originalFetch;
+}
 
 const withoutPaperStorage = { ...env, PAPERS: undefined };
 const callWithoutPaperStorage = (request) => worker.fetch(request, withoutPaperStorage);
@@ -160,5 +222,18 @@ assert.equal(response.status, 404, 'draft card cannot be checked out');
 
 response = await call(adminRequest('/api/admin/sections/jee', 'DELETE', undefined, cookie));
 assert.equal(response.status, 409, 'sections with child sections cannot be deleted');
+
+const failedLoginResponses = await Promise.all(Array.from({ length: 6 }, () => call(new Request(`${origin}/api/admin/login`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.251' },
+  body: JSON.stringify({ password: 'incorrect-password' })
+}))));
+assert.equal(failedLoginResponses.filter((item) => item.status === 401).length, 5, 'parallel failed sign-ins must admit exactly five attempts');
+assert.equal(failedLoginResponses.filter((item) => item.status === 429).length, 1, 'the next parallel failed sign-in is denied atomically');
+
+const headerRules = readFileSync(new URL('../build/_headers', import.meta.url), 'utf8');
+assert.match(headerRules, /\/\*\.css\s+Cache-Control: public, max-age=3600/);
+assert.match(headerRules, /\/\*\.js\s+Cache-Control: public, max-age=3600/);
+assert.match(headerRules, /\/\*\.png\s+Cache-Control: public, max-age=3600/);
 
 console.log(JSON.stringify({ catalogSections: backup.sections.length, cards: backup.cards.length, smoke: 'ok' }));

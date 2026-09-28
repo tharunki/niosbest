@@ -10,7 +10,8 @@
   "assets": {
     "directory": "./build",
     "binding": "ASSETS",
-    "run_worker_first": ["/", "/index.html", "/admin.html", "/library.html", "/api/*", "/paper/*", "/sitemap.xml", "/robots.txt", "/healthz", "/sample-papers.html", "/pyqs.html", "/mcqs.html", "/important-questions.html"]
+    "html_handling": "none",
+    "run_worker_first": ["/", "/index", "/admin", "/library", "/sample-papers", "/pyqs", "/mcqs", "/important-questions", "/index.html", "/admin.html", "/library.html", "/api/*", "/paper/*", "/sitemap.xml", "/robots.txt", "/healthz", "/sample-papers.html", "/pyqs.html", "/mcqs.html", "/important-questions.html"]
   },
   "d1_databases": [
     {
