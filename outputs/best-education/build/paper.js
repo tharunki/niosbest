@@ -99,6 +99,38 @@ async function request(url, options = {}) {
   }
 }
 
+function buyerDetailsFromForm(form) {
+  const emailInput = form.elements.buyerEmail;
+  const nameInput = form.elements.buyerName;
+  const status = form.querySelector('#payment-status');
+  const buyerEmail = compactText(emailInput?.value, 254).toLocaleLowerCase();
+  const buyerName = compactText(nameInput?.value, 80);
+
+  if (emailInput) emailInput.value = buyerEmail;
+  if (nameInput) nameInput.value = buyerName;
+  if (!emailInput || !buyerEmail || !emailInput.checkValidity()) {
+    if (status) status.textContent = 'Enter a valid email address for your purchase access.';
+    emailInput?.focus();
+    emailInput?.reportValidity();
+    return null;
+  }
+  return { buyerEmail, buyerName };
+}
+
+function checkoutPrefill(checkout) {
+  const buyer = checkout?.buyer;
+  if (!buyer || typeof buyer !== 'object') return null;
+  const email = compactText(buyer.email, 254).toLocaleLowerCase();
+  const name = compactText(buyer.name, 80);
+  // Prefill only values the server just validated and returned for this order.
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return null;
+  return name ? { email, name } : { email };
+}
+
+function setPurchaseControls(form, disabled) {
+  form.querySelectorAll('input, button').forEach((control) => { control.disabled = disabled; });
+}
+
 function showError(message) {
   detail.innerHTML = `<h1>Paper unavailable</h1><p class="error">${escapeHTML(message)}</p><p><a href="/library.html">Return to the library</a></p>`;
 }
@@ -180,21 +212,26 @@ function loadRazorpay() {
   return razorpayLoader;
 }
 
-async function buy(paper) {
-  const button = document.querySelector('#buy');
-  const status = document.querySelector('#payment-status');
-  if (!button || !status) return;
-  button.disabled = true;
+async function buy(paper, form) {
+  const button = form.querySelector('#buy');
+  const status = form.querySelector('#payment-status');
+  const buyer = buyerDetailsFromForm(form);
+  if (!button || !status || !buyer) return;
+  setPurchaseControls(form, true);
   button.textContent = 'Preparing secure checkout…';
   try {
-    const checkout = await request(`/api/checkout/${encodeURIComponent(paper.slug)}`, { method: 'POST' });
+    const checkout = await request(`/api/checkout/${encodeURIComponent(paper.slug)}`, {
+      method: 'POST',
+      body: JSON.stringify(buyer)
+    });
     await loadRazorpay();
     saveRecovery(checkout);
     let paymentCallbackStarted = false;
     const resetCheckout = () => {
-      button.disabled = false;
+      setPurchaseControls(form, false);
       button.textContent = 'Buy securely';
     };
+    const prefill = checkoutPrefill(checkout);
     const razorpay = new window.Razorpay({
       key: checkout.key,
       amount: checkout.order.amount,
@@ -203,6 +240,7 @@ async function buy(paper) {
       description: paper.title,
       order_id: checkout.order.id,
       theme: { color: '#263eb7' },
+      ...(prefill ? { prefill } : {}),
       modal: {
         ondismiss: () => {
           if (!paymentCallbackStarted) {
@@ -229,7 +267,7 @@ async function buy(paper) {
     });
     razorpay.open();
   } catch (error) {
-    button.disabled = false;
+    setPurchaseControls(form, false);
     button.textContent = 'Buy securely';
     status.textContent = error.message;
   }
@@ -243,6 +281,10 @@ function tagChips(paper) {
 
 function feedbackMarkup() {
   return `<details class="feedback"><summary>Report a content issue</summary><p>If you spot an incorrect answer, typo or broken link, send a short report to Best Education. Do not include personal details.</p><form id="feedback-form"><label for="feedback-category">Issue type</label><select id="feedback-category" name="category" required><option value="incorrect-answer">Incorrect answer or solution</option><option value="typo">Typo or formatting issue</option><option value="broken-link">Broken link or file issue</option><option value="other">Other content issue</option></select><label for="feedback-message">What needs correcting?</label><textarea id="feedback-message" name="message" maxlength="1200" minlength="5" required placeholder="Describe the page, question or correction."></textarea><div class="feedback-actions"><button class="secondary" type="submit">Send report</button><p id="feedback-status" class="notice" role="status" aria-live="polite"></p></div></form></details>`;
+}
+
+function purchaseMarkup() {
+  return `<form id="purchase-form" class="purchase-form"><div class="purchase-field"><label for="buyer-email">Email for your PDF access <span aria-hidden="true">*</span></label><input id="buyer-email" name="buyerEmail" type="email" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="254" required aria-describedby="buyer-help" placeholder="you@example.com"></div><div class="purchase-field"><label for="buyer-name">Display name <span class="field-optional">Optional</span></label><input id="buyer-name" name="buyerName" type="text" autocomplete="name" maxlength="80" placeholder="Your name"></div><p id="buyer-help" class="buyer-help">We use your email only to provide purchase access and assist with support. It is never sent to analytics.</p><button id="buy" class="button" type="submit">Buy securely</button><p class="notice" id="payment-status" role="status" aria-live="polite"></p></form>`;
 }
 
 async function submitFeedback(event, paper) {
@@ -282,8 +324,11 @@ function renderPaper(paper) {
     ? `<p><a class="preview-link" href="${escapeHTML(paper.link)}" target="_blank" rel="noopener">Open free preview ↗</a></p>`
     : '';
   const tags = tagChips(paper);
-  detail.innerHTML = `<p class="eyebrow">${escapeHTML(collectionLabel(paper))} · ${escapeHTML(paper.subject)} · ${escapeHTML(materialLabel(paper).toUpperCase())}</p><h1>${escapeHTML(paper.title)}</h1><p>${escapeHTML(paper.description || 'Chapter-wise study material for focused revision.')}</p><div class="meta"><span>Secure access</span><span>PDF material</span>${tags}</div><p class="price">₹${escapeHTML(paper.price || '39')}</p>${preview}${paper.available ? '<button id="buy" class="button">Buy securely</button><p class="notice" id="payment-status" role="status" aria-live="polite"></p>' : '<p class="notice">This paper is being prepared for secure purchase. Please check back soon.</p>'}${feedbackMarkup()}`;
-  document.querySelector('#buy')?.addEventListener('click', () => { void buy(paper); });
+  detail.innerHTML = `<p class="eyebrow">${escapeHTML(collectionLabel(paper))} · ${escapeHTML(paper.subject)} · ${escapeHTML(materialLabel(paper).toUpperCase())}</p><h1>${escapeHTML(paper.title)}</h1><p>${escapeHTML(paper.description || 'Chapter-wise study material for focused revision.')}</p><div class="meta"><span>Secure access</span><span>PDF material</span>${tags}</div><p class="price">₹${escapeHTML(paper.price || '39')}</p>${preview}${paper.available ? purchaseMarkup() : '<p class="notice">This paper is being prepared for secure purchase. Please check back soon.</p>'}${feedbackMarkup()}`;
+  document.querySelector('#purchase-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    void buy(paper, event.currentTarget);
+  });
   document.querySelector('#feedback-form')?.addEventListener('submit', (event) => { void submitFeedback(event, paper); });
 }
 
