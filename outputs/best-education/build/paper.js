@@ -1,12 +1,31 @@
 const detail = document.querySelector('#paper-detail');
-const slug = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+function paperSlugFromPath() {
+  const fragment = location.pathname.split('/').filter(Boolean).pop() || '';
+  try { return decodeURIComponent(fragment); }
+  catch { return ''; }
+}
+const slug = paperSlugFromPath();
+const REQUEST_TIMEOUT_MS = 15_000;
+let razorpayLoader;
 function escapeHTML(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]); }
 function collectionLabel(paper) {
   const name = String(paper.displayClassName || paper.className || '').trim();
   return /^\d+$/.test(name) ? `Class ${name}` : name || 'Study resource';
 }
 function materialLabel(paper) { return String(paper.displayType || paper.type || 'Study material'); }
-async function request(url, options = {}) { const response = await fetch(url, { ...options, headers:{ Accept:'application/json', ...(options.body ? { 'Content-Type':'application/json' } : {}), ...options.headers } }); const data = await response.json().catch(() => ({})); if (!response.ok) throw new Error(data.error || 'Something went wrong.'); return data; }
+async function request(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...options, signal:controller.signal, headers:{ Accept:'application/json', ...(options.body ? { 'Content-Type':'application/json' } : {}), ...options.headers } });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Something went wrong.');
+    return data;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw new Error('The request took too long. Please check your connection and try again.');
+    throw error;
+  } finally { window.clearTimeout(timeout); }
+}
 function showError(message) { detail.innerHTML = `<h1>Paper unavailable</h1><p class="error">${escapeHTML(message)}</p><p><a href="/library.html">Return to the library</a></p>`; }
 const recoveryKey = `best-education-purchase-${slug}`;
 function readRecovery() { try { const value = JSON.parse(localStorage.getItem(recoveryKey) || 'null'); if (!value || !value.orderId || !value.recoveryToken || new Date(value.expiresAt).getTime() < Date.now()) { localStorage.removeItem(recoveryKey); return null; } return value; } catch { return null; } }
@@ -14,7 +33,20 @@ function saveRecovery(checkout) { if (!checkout.recovery?.token) return; try { l
 function clearRecovery() { try { localStorage.removeItem(recoveryKey); } catch { /* Ignore unavailable browser storage. */ } }
 function showVerifiedDownload(verified) { clearRecovery(); detail.innerHTML = `<h1>Payment verified</h1><p>Your private download link is ready. It expires in 24 hours.</p><p><a class="button" href="${escapeHTML(verified.downloadUrl)}">Download your PDF</a></p><p class="notice">Please save the file now. The link cannot be used after it expires.</p>`; }
 async function recoverPurchase() { const pending = readRecovery(); if (!pending) return; try { const recovered = await request('/api/payment/recover', { method:'POST', body:JSON.stringify(pending) }); if (recovered.downloadUrl) return showVerifiedDownload(recovered); if (recovered.pending) { const status = document.querySelector('#payment-status'); if (status) { status.textContent = `${recovered.message} `; const retry = document.createElement('button'); retry.type = 'button'; retry.className = 'secondary'; retry.textContent = 'Check payment status'; retry.addEventListener('click', recoverPurchase); status.append(retry); } } } catch { clearRecovery(); } }
-function loadRazorpay() { return new Promise((resolve, reject) => { if (window.Razorpay) return resolve(); const script = document.createElement('script'); script.src = 'https://checkout.razorpay.com/v1/checkout.js'; script.onload = resolve; script.onerror = () => reject(new Error('The secure payment window could not load.')); document.head.append(script); }); }
+function loadRazorpay() {
+  if (window.Razorpay) return Promise.resolve();
+  if (razorpayLoader) return razorpayLoader;
+  razorpayLoader = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    const timeout = window.setTimeout(() => reject(new Error('The secure payment window took too long to load. Please try again.')), REQUEST_TIMEOUT_MS);
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => { window.clearTimeout(timeout); resolve(); };
+    script.onerror = () => { window.clearTimeout(timeout); reject(new Error('The secure payment window could not load.')); };
+    document.head.append(script);
+  }).catch(error => { razorpayLoader = null; throw error; });
+  return razorpayLoader;
+}
 async function buy(paper) {
   const button = document.querySelector('#buy'); button.disabled = true; button.textContent = 'Preparing secure checkout…';
   try { const checkout = await request(`/api/checkout/${encodeURIComponent(paper.slug)}`, { method:'POST' }); await loadRazorpay(); saveRecovery(checkout); let paymentCallbackStarted = false; const resetCheckout = () => { button.disabled = false; button.textContent = 'Buy securely'; }; const razorpay = new window.Razorpay({ key:checkout.key, amount:checkout.order.amount, currency:checkout.order.currency, name:'Best Education', description:paper.title, order_id:checkout.order.id, theme:{ color:'#263eb7' }, modal:{ ondismiss:() => { if (!paymentCallbackStarted) { resetCheckout(); const status = document.querySelector('#payment-status'); if (status) status.textContent = 'Checkout closed. You can try again whenever you are ready.'; } } }, handler:async payment => { paymentCallbackStarted = true; try { const verified = await request('/api/payment/verify', { method:'POST', body:JSON.stringify(payment) }); showVerifiedDownload(verified); } catch (error) { const status = document.querySelector('#payment-status'); if (status) status.textContent = `${error.message} Checking your payment safely…`; await recoverPurchase(); } } }); razorpay.on('payment.failed', response => { clearRecovery(); resetCheckout(); document.querySelector('#payment-status').textContent = response.error.description || 'Payment was not completed.'; }); razorpay.open(); }

@@ -8,17 +8,22 @@ const homeCollectionGrid = document.querySelector('#home-collection-grid');
 let searchTimer;
 let activeSearchRequest;
 let searchRequestId = 0;
+const SEARCH_REQUEST_TIMEOUT_MS = 12_000;
 
 function closeMenu() { nav?.classList.remove('open'); menuButton?.setAttribute('aria-expanded', 'false'); menuButton?.setAttribute('aria-label', 'Open menu'); }
 menuButton?.addEventListener('click', () => { const isOpen = nav.classList.toggle('open'); menuButton.setAttribute('aria-expanded', String(isOpen)); menuButton.setAttribute('aria-label', isOpen ? 'Close menu' : 'Open menu'); });
 nav?.querySelectorAll('a').forEach(link => link.addEventListener('click', closeMenu));
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeMenu(); });
 
-const searchStatus = document.createElement('p');
-searchStatus.setAttribute('role', 'status');
-searchStatus.setAttribute('aria-live', 'polite');
-searchStatus.style.cssText = 'margin:12px 0 0;color:#657477;font-size:13px;';
-document.querySelector('.quick-search')?.append(searchStatus);
+const searchStatus = document.querySelector('#search-status') || document.createElement('p');
+if (!searchStatus.id) {
+  searchStatus.id = 'search-status';
+  searchStatus.setAttribute('role', 'status');
+  searchStatus.setAttribute('aria-live', 'polite');
+  searchStatus.setAttribute('aria-atomic', 'true');
+  searchStatus.style.cssText = 'min-height:1.3em;margin:12px 0 0;color:#657477;font-size:13px;';
+  (document.querySelector('.search-group') || document.querySelector('.quick-search'))?.append(searchStatus);
+}
 const fallbackPapers = [
   ['1','Chemical Reactions and Equations'],['2','Acids, Bases and Salts'],['3','Metals and Non-metals'],['4','Carbon and its Compounds'],['5','Life Processes'],['6','Control and Coordination'],['7','How Do Organisms Reproduce?'],['8','Heredity'],['9','Light: Reflection and Refraction'],['10','The Human Eye and the Colourful World'],['11','Electricity'],['12','Magnetic Effects of Electric Current'],['13','Our Environment'],['14','Sustainable Management of Natural Resources']
 ].map(([chapter,title]) => ({ slug:`sample-class-10-science-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`, className:'10', subject:'Science', type:'sample', title, description:'Sample papers, PYQs, MCQs and important questions', price:'39', available:false }));
@@ -41,12 +46,15 @@ function renderFeaturedCollections(collections) {
 }
 async function loadFeaturedCollections() {
   if (!homeCollections) return;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), SEARCH_REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch('/api/catalog', { headers:{ Accept:'application/json' } });
+    const response = await fetch('/api/catalog', { headers:{ Accept:'application/json' }, signal:controller.signal });
     if (!response.ok) return;
     const data = await response.json();
     renderFeaturedCollections(Array.isArray(data.sections) ? data.sections : []);
   } catch { /* The core home page remains useful if the optional featured shelf is unavailable. */ }
+  finally { window.clearTimeout(timeout); }
 }
 function productUrl(slug) { return `/paper/${encodeURIComponent(slug)}`; }
 function collectionLabel(paper) {
@@ -59,15 +67,16 @@ function paperAction(paper) {
 }
 function renderPapers(papers, message = '') {
   paperGrid.setAttribute('aria-busy', 'false');
+  if (message) searchStatus.textContent = message;
   if (!papers.length) { paperGrid.innerHTML = '<p class="empty-state">No papers match that search yet. Try a class, subject, or chapter name.</p>'; return; }
   paperGrid.innerHTML = papers.map((paper, index) => `<article class="paper-card"><span class="tag ${['blue','amber','green','plum'][index % 4]}">${escapeHTML(collectionLabel(paper))} · ${escapeHTML(paper.subject)}</span><h3>${escapeHTML(paper.title)}</h3><p>${escapeHTML(paper.description || 'Chapter-wise study material')}</p><footer>${paperAction(paper)}</footer></article>`).join('');
-  if (message) searchStatus.textContent = message;
 }
 async function fetchPapers(query = '', initial = false) {
   const requestId = ++searchRequestId;
   activeSearchRequest?.abort();
   const controller = new AbortController();
   activeSearchRequest = controller;
+  const timeout = window.setTimeout(() => controller.abort(), SEARCH_REQUEST_TIMEOUT_MS);
   paperGrid.setAttribute('aria-busy', 'true');
   const params = new URLSearchParams(query ? { q:query } : { type:'sample', class:'10', subject:'Science' });
   try {
@@ -81,6 +90,7 @@ async function fetchPapers(query = '', initial = false) {
     const filtered = query ? fallbackPapers.filter(paper => `${paper.className} ${paper.subject} ${paper.title}`.toLowerCase().includes(query.toLowerCase())) : fallbackPapers;
     renderPapers(filtered, 'Showing available papers while the search service reconnects.'); return filtered;
   } finally {
+    window.clearTimeout(timeout);
     if (requestId === searchRequestId) activeSearchRequest = null;
   }
 }

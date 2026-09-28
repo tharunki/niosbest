@@ -4,6 +4,8 @@ const catalogNote = document.querySelector('#catalog-note');
 const catalogBack = document.querySelector('#catalog-back');
 let catalog = { sections: [], cards: [] };
 let selectedSectionId = '';
+let catalogRequest;
+const CATALOG_REQUEST_TIMEOUT_MS = 12_000;
 
 function escapeHTML(value = '') { return String(value).replace(/[&<>'"]/g, character => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]); }
 function normaliseCatalog(data) {
@@ -90,18 +92,29 @@ function renderFromHash() {
   if (section) renderSection(section.id); else renderCollections();
 }
 async function loadCatalog() {
+  catalogRequest?.abort();
+  const controller = new AbortController();
+  catalogRequest = controller;
+  const timeout = window.setTimeout(() => controller.abort(), CATALOG_REQUEST_TIMEOUT_MS);
+  catalogGrid.setAttribute('aria-busy', 'true');
   try {
-    const response = await fetch('/api/catalog', { headers: { Accept: 'application/json' } });
+    const response = await fetch('/api/catalog', { headers: { Accept: 'application/json' }, signal:controller.signal });
     if (!response.ok) throw new Error();
     const data = await response.json();
+    if (catalogRequest !== controller) return;
     catalog = normaliseCatalog(data);
     catalogGrid.setAttribute('aria-busy', 'false');
     renderFromHash();
   } catch {
+    if (catalogRequest !== controller) return;
     catalogGrid.setAttribute('aria-busy', 'false');
     catalogHeading.textContent = 'Study collections';
     catalogNote.textContent = 'The library is reconnecting.';
-    catalogGrid.innerHTML = '<div class="catalog-empty"><strong>The study library is temporarily unavailable.</strong>Please try again in a moment, or return to the home page to browse the existing resource pages.</div>';
+    catalogGrid.innerHTML = '<div class="catalog-empty"><strong>The study library is temporarily unavailable.</strong>Please try again in a moment, or return to the home page to browse the existing resource pages.<p><button class="catalog-back catalog-retry" type="button">Try again</button></p></div>';
+    catalogGrid.querySelector('.catalog-retry')?.addEventListener('click', () => { void loadCatalog(); });
+  } finally {
+    window.clearTimeout(timeout);
+    if (catalogRequest === controller) catalogRequest = null;
   }
 }
 catalogBack.addEventListener('click', () => {

@@ -54,6 +54,8 @@ let selectedClass = '10';
 let selectedSubject = null;
 let classCards = [];
 let classRequestId = 0;
+let activeClassRequest;
+const CLASS_REQUEST_TIMEOUT_MS = 12_000;
 
 function escapeHTML(value = '') {
   return String(value).replace(/[&<>'"]/g, (character) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]);
@@ -72,18 +74,34 @@ function subjectsForSelectedClass() {
 async function loadClassCards() {
   const requestId = ++classRequestId;
   const requestedClass = selectedClass;
+  activeClassRequest?.abort();
+  const controller = new AbortController();
+  activeClassRequest = controller;
+  const timeout = window.setTimeout(() => controller.abort(), CLASS_REQUEST_TIMEOUT_MS);
+  grid.setAttribute('aria-busy', 'true');
+  courseNote.textContent = `Loading the latest Class ${requestedClass} releases…`;
+  let usingFallback = false;
   try {
     const query = new URLSearchParams({ type, class: requestedClass });
-    const response = await fetch(`/api/cards?${query}`, { headers: { Accept: 'application/json' } });
+    const response = await fetch(`/api/cards?${query}`, { headers: { Accept: 'application/json' }, signal:controller.signal });
     if (!response.ok) throw new Error();
     const data = await response.json();
     if (requestId !== classRequestId || selectedClass !== requestedClass) return;
     classCards = Array.isArray(data.cards) ? data.cards : [];
-  } catch {
+  } catch (error) {
     if (requestId !== classRequestId || selectedClass !== requestedClass) return;
     classCards = [];
+    usingFallback = true;
+  } finally {
+    window.clearTimeout(timeout);
+    if (requestId === classRequestId) {
+      activeClassRequest = null;
+      grid.setAttribute('aria-busy', 'false');
+    }
   }
+  if (requestId !== classRequestId || selectedClass !== requestedClass) return;
   if (selectedSubject) renderLessons(); else renderSubjects();
+  if (usingFallback) courseNote.textContent = `Class ${requestedClass}: showing verified lesson titles while live releases reconnect.`;
 }
 
 function renderSubjects() {
