@@ -52,6 +52,7 @@ bundle.removeAttribute('target');
 bundle.removeAttribute('rel');
 let selectedClass = '10';
 let selectedSubject = null;
+let selectedTags = new Set();
 let classCards = [];
 let classRequestId = 0;
 let activeClassRequest;
@@ -62,6 +63,70 @@ function escapeHTML(value = '') {
 }
 
 function productLink(slug) { return slug ? `/paper/${encodeURIComponent(slug)}` : '#library-grid'; }
+
+function compactTag(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 48);
+}
+
+function tagsFor(card) {
+  let source = card?.tags;
+  if (typeof source === 'string') {
+    try {
+      const parsed = JSON.parse(source);
+      source = Array.isArray(parsed) ? parsed : source;
+    } catch { /* Legacy comma-separated tags are still accepted. */ }
+  }
+  const values = Array.isArray(source) ? source : String(source || '').split(/[,\n]/);
+  const seen = new Set();
+  return values.map(compactTag).filter((tag) => {
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 8);
+}
+
+function cardTagMarkup(card) {
+  const tags = tagsFor(card);
+  if (!tags.length) return '';
+  return `<div class="card-tags" aria-label="Topics: ${escapeHTML(tags.join(', '))}">${tags.map((tag) => `<span>${escapeHTML(tag)}</span>`).join('')}</div>`;
+}
+
+function availableTags(cards) {
+  const tags = new Map();
+  cards.forEach((card) => tagsFor(card).forEach((tag) => {
+    const key = tag.toLocaleLowerCase();
+    if (!tags.has(key)) tags.set(key, tag);
+  }));
+  return [...tags.values()].sort((first, second) => first.localeCompare(second));
+}
+
+function hasSelectedTags(card) {
+  if (!selectedTags.size) return true;
+  const cardTags = new Set(tagsFor(card).map((tag) => tag.toLocaleLowerCase()));
+  return [...selectedTags].every((tag) => cardTags.has(tag));
+}
+
+function tagFilterMarkup(tags) {
+  if (!tags.length) return '';
+  return `<div class="tag-filter" aria-label="Filter by topic"><span>Filter by topic</span><div class="tag-filter-options">${tags.map((tag) => {
+    const key = tag.toLocaleLowerCase();
+    return `<button type="button" class="tag-filter-button" data-tag-filter="${escapeHTML(tag)}" aria-pressed="${selectedTags.has(key)}">${escapeHTML(tag)}</button>`;
+  }).join('')}<button type="button" class="tag-filter-clear" data-clear-tags ${selectedTags.size ? '' : 'hidden'}>Clear filters</button></div></div>`;
+}
+
+function bindTagFilters() {
+  grid.querySelectorAll('[data-tag-filter]').forEach((button) => button.addEventListener('click', () => {
+    const tag = compactTag(button.dataset.tagFilter).toLocaleLowerCase();
+    if (!tag) return;
+    if (selectedTags.has(tag)) selectedTags.delete(tag); else selectedTags.add(tag);
+    renderLessons();
+  }));
+  grid.querySelector('[data-clear-tags]')?.addEventListener('click', () => {
+    selectedTags.clear();
+    renderLessons();
+  });
+}
 
 function subjectsForSelectedClass() {
   const verifiedSubjects = Object.keys(catalog[selectedClass] || {});
@@ -106,6 +171,7 @@ async function loadClassCards() {
 
 function renderSubjects() {
   selectedSubject = null;
+  selectedTags.clear();
   const subjects = subjectsForSelectedClass();
   if (!subjects.length) {
     courseNote.textContent = `Class ${selectedClass}: the verified subject catalogue is being prepared.`;
@@ -123,6 +189,7 @@ function renderSubjects() {
   }).join('');
   grid.querySelectorAll('[data-subject]').forEach((button) => button.addEventListener('click', () => {
     selectedSubject = button.dataset.subject;
+    selectedTags.clear();
     renderLessons();
   }));
   bundle.href = '#library-grid';
@@ -137,31 +204,39 @@ function purchaseAction(card, fallbackPrice, unitLabel) {
 function renderLessons() {
   const lessons = catalog[selectedClass]?.[selectedSubject] || [];
   const subjectCards = classCards.filter((card) => card.type === type && card.className === selectedClass && card.subject === selectedSubject);
-  const customCards = subjectCards.filter((card) => !card.isBundle);
+  const allCustomCards = subjectCards.filter((card) => !card.isBundle);
   const bundleCard = subjectCards.find((card) => card.isBundle);
   const releasedCount = subjectCards.filter((card) => card.available).length;
+  const filterTags = availableTags(allCustomCards);
+  selectedTags = new Set([...selectedTags].filter((tag) => filterTags.some((item) => item.toLocaleLowerCase() === tag)));
+  const customCards = allCustomCards.filter(hasSelectedTags);
   courseNote.textContent = releasedCount
     ? `Class ${selectedClass} · ${selectedSubject}. Select a released PDF for secure purchase.`
     : `Class ${selectedClass} · ${selectedSubject}. This catalogue is released only when its secure PDF is ready.`;
   const toolbar = `<div class="lesson-toolbar"><span class="chapter">Class ${escapeHTML(selectedClass)} · ${escapeHTML(selectedSubject)}</span><button class="back-subjects" type="button">← All subjects</button></div>`;
-  if (!lessons.length && !customCards.length) {
+  if (!lessons.length && !allCustomCards.length) {
     grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${escapeHTML(selectedSubject)} is not published yet.</strong>Best Education will add the exact lesson list and PDFs after they are verified.</div>`;
   } else {
     const standardSlugs = new Set();
     const standardCards = lessons.map((lesson, index) => {
       const slug = `${type}-class-${selectedClass}-${selectedSubject}-${lesson}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
       standardSlugs.add(slug);
-      const custom = customCards.find((card) => card.slug === slug);
+      const sourceCard = allCustomCards.find((card) => card.slug === slug);
+      if (selectedTags.size && (!sourceCard || !hasSelectedTags(sourceCard))) return '';
+      const custom = sourceCard && hasSelectedTags(sourceCard) ? sourceCard : null;
       const title = custom?.title || lesson;
       const description = custom?.description || `${labels[type]} PDF · chapter-wise practice`;
-      return `<article class="lesson"><span class="chapter">Lesson ${index + 1} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(title)}</h3><p>${escapeHTML(description)}</p><div class="buy">${purchaseAction(custom, '39', 'per lesson PDF')}</div></article>`;
+      return `<article class="lesson"><span class="chapter">Lesson ${index + 1} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(title)}</h3><p>${escapeHTML(description)}</p>${cardTagMarkup(custom)}<div class="buy">${purchaseAction(custom, '39', 'per lesson PDF')}</div></article>`;
     }).join('');
     const addedCards = customCards.filter((card) => !standardSlugs.has(card.slug)).map((card) => {
-      return `<article class="lesson"><span class="chapter">${escapeHTML(labels[type])} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || `${labels[type]} practice material`)}</p><div class="buy">${purchaseAction(card, '39', 'per PDF')}</div></article>`;
+      return `<article class="lesson"><span class="chapter">${escapeHTML(labels[type])} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || `${labels[type]} practice material`)}</p>${cardTagMarkup(card)}<div class="buy">${purchaseAction(card, '39', 'per PDF')}</div></article>`;
     }).join('');
-    grid.innerHTML = toolbar + standardCards + addedCards;
+    const resources = standardCards + addedCards;
+    const noMatches = !resources ? '<div class="empty-library"><strong>No materials match those topic filters.</strong>Clear a filter to see the complete lesson list.</div>' : '';
+    grid.innerHTML = toolbar + tagFilterMarkup(filterTags) + resources + noMatches;
   }
   grid.querySelector('.back-subjects')?.addEventListener('click', renderSubjects);
+  bindTagFilters();
   bundle.href = bundleCard?.available ? productLink(bundleCard.slug) : '#library-grid';
   bundle.textContent = bundleCard?.available ? `View full bundle · ₹${bundleCard.price || '399'}` : 'Full bundle coming soon';
 }

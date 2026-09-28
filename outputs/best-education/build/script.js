@@ -29,6 +29,28 @@ const fallbackPapers = [
 ].map(([chapter,title]) => ({ slug:`sample-class-10-science-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '')}`, className:'10', subject:'Science', type:'sample', title, description:'Sample papers, PYQs, MCQs and important questions', price:'39', available:false }));
 
 function escapeHTML(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[char]); }
+function tagsFor(paper) {
+  let source = paper?.tags;
+  if (typeof source === 'string') {
+    try {
+      const parsed = JSON.parse(source);
+      source = Array.isArray(parsed) ? parsed : source;
+    } catch { /* Legacy comma-separated tags are still accepted. */ }
+  }
+  const values = Array.isArray(source) ? source : String(source || '').split(/[,\n]/);
+  const seen = new Set();
+  return values.map((tag) => String(tag || '').replace(/\s+/g, ' ').trim().slice(0, 48)).filter((tag) => {
+    const key = tag.toLocaleLowerCase();
+    if (!tag || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 4);
+}
+function paperTagMarkup(paper) {
+  const tags = tagsFor(paper);
+  if (!tags.length) return '';
+  return `<div class="paper-card-tags" aria-label="Topics: ${escapeHTML(tags.join(', '))}">${tags.map((tag) => `<span>${escapeHTML(tag)}</span>`).join('')}</div>`;
+}
 function featuredCardCount(section) {
   return (Array.isArray(section.cards) ? section.cards.length : 0)
     + (Array.isArray(section.children) ? section.children.reduce((total, child) => total + (Array.isArray(child.cards) ? child.cards.length : 0), 0) : 0);
@@ -69,7 +91,7 @@ function renderPapers(papers, message = '') {
   paperGrid.setAttribute('aria-busy', 'false');
   if (message) searchStatus.textContent = message;
   if (!papers.length) { paperGrid.innerHTML = '<p class="empty-state">No papers match that search yet. Try a class, subject, or chapter name.</p>'; return; }
-  paperGrid.innerHTML = papers.map((paper, index) => `<article class="paper-card"><span class="tag ${['blue','amber','green','plum'][index % 4]}">${escapeHTML(collectionLabel(paper))} · ${escapeHTML(paper.subject)}</span><h3>${escapeHTML(paper.title)}</h3><p>${escapeHTML(paper.description || 'Chapter-wise study material')}</p><footer>${paperAction(paper)}</footer></article>`).join('');
+  paperGrid.innerHTML = papers.map((paper, index) => `<article class="paper-card"><span class="tag ${['blue','amber','green','plum'][index % 4]}">${escapeHTML(collectionLabel(paper))} · ${escapeHTML(paper.subject)}</span><h3>${escapeHTML(paper.title)}</h3><p>${escapeHTML(paper.description || 'Chapter-wise study material')}</p>${paperTagMarkup(paper)}<footer>${paperAction(paper)}</footer></article>`).join('');
 }
 async function fetchPapers(query = '', initial = false) {
   const requestId = ++searchRequestId;
@@ -111,3 +133,37 @@ search?.addEventListener('keydown', event => { if (event.key === 'Enter') { even
 fetchPapers('', true);
 const scheduleLibraryShelf = window.requestIdleCallback || (callback => setTimeout(callback, 120));
 scheduleLibraryShelf(() => { void loadFeaturedCollections(); });
+
+function todayKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+
+function reportAnonymousVisit() {
+  // This intentionally contains no account, device, name, email, or browsing data.
+  // The server is responsible for rate-limiting and aggregating this minimal signal.
+  if (location.protocol === 'file:' || navigator.doNotTrack === '1' || navigator.onLine === false) return;
+  const day = todayKey();
+  const sessionKey = `best-education-visit-session-${day}`;
+  const dayKey = `best-education-visit-${day}`;
+  try {
+    if (sessionStorage.getItem(sessionKey) || localStorage.getItem(dayKey)) return;
+    sessionStorage.setItem(sessionKey, '1');
+    localStorage.setItem(dayKey, '1');
+  } catch {
+    if (window.__bestEducationVisitReported) return;
+    window.__bestEducationVisitReported = true;
+  }
+  void fetch('/api/analytics/visit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+    credentials: 'omit',
+    cache: 'no-store',
+    keepalive: true,
+    referrerPolicy: 'no-referrer'
+  }).catch(() => { /* Analytics must never affect the learner experience. */ });
+}
+
+const scheduleAnalytics = window.requestIdleCallback || (callback => setTimeout(callback, 900));
+scheduleAnalytics(reportAnonymousVisit);
