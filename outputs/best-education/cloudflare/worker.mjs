@@ -1317,7 +1317,13 @@ async function renderPaperPage(request, env, slug) {
 }
 
 async function api(request, env, url) {
-  if (request.method === 'POST' && url.pathname === '/api/payment/webhook') return paymentWebhook(request, env);
+  // Razorpay cannot send an Origin header, so its signed webhook is the one
+  // deliberately origin-exempt route. Keep every other verb explicit rather
+  // than allowing it to fall through to the general admin authentication path.
+  if (url.pathname === '/api/payment/webhook') {
+    if (request.method !== 'POST') return methodNotAllowed('POST');
+    return paymentWebhook(request, env);
+  }
   if (!['GET', 'POST', 'PUT', 'DELETE'].includes(request.method)) return methodNotAllowed('GET, POST, PUT, DELETE');
   if (!validSameOrigin(request)) return json({ error: 'Invalid origin.' }, 403);
   if (request.method === 'GET' && url.pathname === '/healthz') {
@@ -1356,6 +1362,7 @@ async function api(request, env, url) {
     let input;
     try { input = await readJson(request); }
     catch (error) { return apiErrorResponse(error, 'Invalid sign-in request.'); }
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return json({ error: 'Invalid sign-in request.' }, 400);
     if (!(await secureEqual(input.password || '', env.ADMIN_PASSWORD))) {
       if (!await recordFailedLogin(request, env)) return json({ error: 'Too many attempts. Try again later.' }, 429);
       return json({ error: 'Incorrect password.' }, 401);

@@ -72,6 +72,9 @@ assert.ok(sqlite.prepare('SELECT expires_at FROM admin_sessions').get().expires_
 response = await call(new Request(`${origin}/api/catalog`, { method: 'PATCH' }));
 assert.equal(response.status, 405, 'unsupported API methods must be rejected predictably');
 assert.equal(response.headers.get('allow'), 'GET, POST, PUT, DELETE');
+response = await call(new Request(`${origin}/api/payment/webhook`));
+assert.equal(response.status, 405, 'payment webhooks only accept their signed POST requests');
+assert.equal(response.headers.get('allow'), 'POST');
 response = await call(new Request(`${origin}/`, { method: 'POST' }));
 assert.equal(response.status, 405, 'static routes accept only GET and HEAD');
 assert.equal(response.headers.get('allow'), 'GET, HEAD');
@@ -91,6 +94,9 @@ for (const [alias, target] of [
 response = await call(new Request(`${origin}/api/admin/session`, { headers: { Cookie: 'unrelated=%E0%A4%A' } }));
 assert.equal(response.status, 200, 'a malformed unrelated cookie must not crash the request');
 assert.equal((await response.json()).authenticated, false);
+
+response = await call(jsonRequest('/api/admin/login', null));
+assert.equal(response.status, 400, 'non-object sign-in JSON is rejected without causing a worker error');
 
 response = await call(adminRequest('/api/admin/cards', 'POST', { title: 'x'.repeat(1_000_001) }, cookie));
 assert.equal(response.status, 413, 'oversized JSON is rejected while streaming before any card write');
