@@ -3,7 +3,7 @@
   // draft. The resource checkout has its own post-sign-in route.
   const resource = new URLSearchParams(location.search).get('resource');
   if (/^(tma|study|pyq)-(10|12)-[a-z-]+$/.test(resource || '')) {
-    localStorage.removeItem('niosEnrollIntent');
+    try { localStorage.removeItem('niosEnrollIntent'); } catch { /* Storage is optional UI state. */ }
     document.querySelectorAll('.intent').forEach(item => {
       item.textContent = '';
       item.classList.remove('show');

@@ -14,7 +14,12 @@ const environment = {
   PORT: String(port),
   PORTAL_STATE_DRIVER: 'local',
   PORTAL_STATE_DIR: stateDirectory,
-  STORAGE_DRIVER: 'local',
+  // Mixed-case input must normalize, but a driver name alone must never make
+  // production writes ready without all private storage credentials.
+  STORAGE_DRIVER: 'SuPaBaSe',
+  SUPABASE_URL: 'https://example.supabase.co',
+  SUPABASE_BUCKET: 'student-documents',
+  SUPABASE_SERVICE_ROLE_KEY: ' ',
   APP_ENCRYPTION_KEY: 'a'.repeat(64),
   ADMIN_API_TOKEN: 'b'.repeat(40),
   BOOTSTRAP_ADMIN_EMAIL: 'niosbest.tvl@gmail.com',
@@ -43,6 +48,8 @@ try {
   const health = await healthResponse.json();
   assert.equal(health.readyForWrites, false, 'local state is never write-ready in production');
   assert.equal(health.stateStore.driver, 'local');
+  assert.equal(health.storage, 'supabase', 'storage driver is normalized once for health and runtime operations');
+  assert.equal(health.durableFileStorage, false, 'incomplete remote-storage configuration must not unlock production writes');
   assert.equal(health.stateStore.writeReady, false, 'health does not advertise unsafe local production writes as ready');
   const registration = await fetch(`http://127.0.0.1:${port}/api/auth/register`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
@@ -51,7 +58,7 @@ try {
   const body = await registration.json();
   assert.equal(registration.status, 503, 'production registration is blocked without durable state');
   assert.equal(body.code, 'DURABLE_STATE_REQUIRED');
-  console.log('production-durable-state-gate.test.mjs: 5 passed');
+  console.log('production-durable-state-gate.test.mjs: 7 passed');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolvePromise => child.once('exit', resolvePromise));

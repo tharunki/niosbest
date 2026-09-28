@@ -15,7 +15,16 @@
   <main class="wrap"><section class="hero"><div><div class="eyebrow" id="modeLabel">YOUR BATCH</div><h1 id="pageTitle">Learning Hub</h1><p id="pageCopy">Only the subjects and materials from your active batch are shown here.</p></div><aside class="enrollment"><b id="batchName">Loading enrollment…</b><span id="batchMeta">Checking batch access</span></aside></section><div class="grid"><section class="card"><div class="card-title"><h2 id="primaryTitle">Live classes</h2><span id="primaryMeta">Batch-only schedule</span></div><div id="primaryList"></div></section><aside class="side"><section class="card"><div class="card-title"><h2>Study materials</h2><span>Stream-filtered</span></div><div class="material-list" id="materials"></div></section><section class="card notice"><b>Access protection</b>Every request is filtered against your active Batch ID, board, class and stream. Materials from Commerce and Arts are not returned to a Science student.</section></aside></div></main><div class="toast" id="toast"><i>✓</i><span></span></div>
   <script>
     // This page is served only after server-side cookie authentication succeeds.
-    try { if (!sessionStorage.getItem('niosSession')) sessionStorage.setItem('niosSession', JSON.stringify({ id: 'cookie-session' })); } catch { /* private browsing may block storage */ }
+    // Storage is optional UI state, so a private-browsing restriction must not
+    // prevent a cookie-authenticated learner from opening their batch hub.
+    try { if (!sessionStorage.getItem('niosSession')) sessionStorage.setItem('niosSession', JSON.stringify(window.__niosSessionBootstrap || { id: 'cookie-session' })); }
+    catch {
+      try {
+        Object.defineProperty(window, 'sessionStorage', { configurable: true, value: {
+          getItem(key) { return key === 'niosSession' ? JSON.stringify(window.__niosSessionBootstrap || { id: 'cookie-session' }) : null; }, setItem() {}, removeItem() {}
+        } });
+      } catch { /* The server-side cookie remains authoritative. */ }
+    }
   </script>
   <script>
     const session=JSON.parse(sessionStorage.getItem('niosSession')||'null');if(!session?.id)location.replace('/login');const homeworkMode=location.pathname==='/homework'||location.pathname.endsWith('/homework');const toast=document.getElementById('toast');function notify(message){toast.querySelector('span').textContent=message;toast.classList.add('show');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>toast.classList.remove('show'),3300)}function escape(value){return String(value).replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]))}function time(value){return new Date(value).toLocaleString([], {weekday:'short',day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})}

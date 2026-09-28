@@ -2,9 +2,9 @@ import { createServer } from 'node:http';
 import { counselorReply } from './counselor.mjs';
 import { captureResourceOrder, resourceStore } from './resource-store.mjs';
 import { createStateStore, resolveStateStoreConfig } from './state-store.mjs';
-import { readFile, writeFile, mkdir, stat } from 'node:fs/promises';
-import { createHash, createHmac, randomBytes, createCipheriv, createDecipheriv, timingSafeEqual, scryptSync } from 'node:crypto';
-import { dirname, extname, join, normalize, resolve } from 'node:path';
+import { readFile, writeFile, mkdir, stat, unlink } from 'node:fs/promises';
+import { createHash, createHmac, randomBytes, randomInt, createCipheriv, createDecipheriv, timingSafeEqual, scryptSync } from 'node:crypto';
+import { dirname, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -28,6 +28,16 @@ const stateFile = join(stateDir, 'state.json');
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === 'production';
 const demosEnabled = !isProduction && process.env.ALLOW_DEMO_ACCOUNTS !== 'false';
+function s3EndpointConfigurationError(value) {
+  const source = String(value || '').trim();
+  if (!source) return null; // Default AWS endpoints are always HTTPS.
+  try {
+    const endpoint = new URL(source);
+    if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) return 'valid HTTP(S) S3_ENDPOINT without credentials';
+    if (isProduction && endpoint.protocol !== 'https:') return 'HTTPS S3_ENDPOINT in production';
+    return null;
+  } catch { return 'valid HTTP(S) S3_ENDPOINT'; }
+}
 function configuredPublicOrigin(value) {
   const source = String(value || '').trim();
   if (!source) return null;
@@ -52,7 +62,7 @@ function searchIndexingAllowed(request) {
   return !isProduction || Boolean(publicOrigin && requestHost(request) === publicOrigin.host.toLowerCase());
 }
 function isPrivateSearchPath(pathname) {
-  return /^\/(?:api|admin|dashboard|student-app|student-desk|active-student-dashboard|pending-admission-dashboard|batch-hub|teacher-portal|login|auth|checkout|payment-pending|admission-intake|admission-wizard|application-wizard|accept-invite|live-classes|homework|resource-checkout)(?:[/.]|$)/.test(pathname);
+  return /^\/(?:api|admin|admission-admin|dashboard|student-app|student-desk|active-student-dashboard|pending-admission-dashboard|batch-hub|teacher-portal|login|auth|checkout|payment-pending|admission-intake|admission-wizard|application-wizard|accept-invite|live-classes|homework|resource-checkout)(?:[./-]|$)/.test(pathname);
 }
 const stateStoreConfig = resolveStateStoreConfig({ isProduction, localFilePath: stateFile });
 const stateStore = await createStateStore(stateStoreConfig);
@@ -60,7 +70,21 @@ const stateStore = await createStateStore(stateStoreConfig);
 // truth for admissions, credentials, payments, or document metadata. Public
 // pages can remain readable while the operator completes the database setup.
 const durableStateRequired = isProduction;
-const durableFileStorage = ['supabase', 's3'].includes(String(process.env.STORAGE_DRIVER || 'local').trim().toLowerCase());
+// Normalize this once. Runtime storage operations and readiness reporting must
+// make the same decision even when an operator enters a mixed-case value.
+const normalizedStorageDriver = String(process.env.STORAGE_DRIVER || 'local').trim().toLowerCase();
+const storageConfigurationRequirements = normalizedStorageDriver === 'supabase'
+  ? ['SUPABASE_URL', 'SUPABASE_BUCKET', 'SUPABASE_SERVICE_ROLE_KEY']
+  : normalizedStorageDriver === 's3'
+    ? ['S3_BUCKET', 'S3_REGION', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY']
+    : [];
+const storageEndpointConfigurationError = normalizedStorageDriver === 's3' ? s3EndpointConfigurationError(process.env.S3_ENDPOINT) : null;
+const storageConfigurationMissing = [
+  ...storageConfigurationRequirements.filter(name => !String(process.env[name] || '').trim()),
+  ...(storageEndpointConfigurationError ? [storageEndpointConfigurationError] : [])
+];
+const durableFileStorage = ['supabase', 's3'].includes(normalizedStorageDriver)
+  && storageConfigurationMissing.length === 0;
 const productionWritesReady = !durableStateRequired || (stateStore.durable && durableFileStorage);
 const devKey = createHash('sha256').update('nios-best-academy-development-key-only').digest('hex');
 const encryptionKeyHex = process.env.APP_ENCRYPTION_KEY || (isProduction ? '' : devKey);
@@ -134,14 +158,132 @@ function tryDecrypt(record) {
 }
 function hashPassword(password) { const salt = randomBytes(16).toString('hex'); return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`; }
 function matchesPassword(password, stored) { const [salt, expected] = String(stored).split(':'); if (!salt || !expected) return false; const actual = scryptSync(password, salt, 64).toString('hex'); return actual.length === expected.length && timingSafeEqual(Buffer.from(actual), Buffer.from(expected)); }
+const emailVerificationTtlMs = 10 * 60_000;
+const emailVerificationThrottleWindowMs = 15 * 60_000;
+// One initial message plus up to three resends per rolling 15-minute window.
+const emailVerificationSendLimit = 4;
+const emailVerificationResendRequestLimit = 3;
+const emailVerificationAttemptLimit = 8;
+function studentEmailIsVerified(user) { return user?.role !== 'student' || Boolean(user?.emailVerifiedAt); }
+function emailVerificationTestMode() { return !isProduction && process.env.EMAIL_VERIFICATION_TEST_MODE === 'true'; }
+function emailVerificationDeliveryConfig() {
+  const apiKey = String(process.env.RESEND_API_KEY || '').trim();
+  const from = String(process.env.EMAIL_VERIFICATION_FROM || process.env.ADMISSION_EMAIL_FROM || '').trim();
+  return apiKey && from ? { apiKey, from } : null;
+}
+function emailVerificationCodeHash(userId, code) {
+  // The six-digit code is deliberately never written to state. A keyed HMAC
+  // prevents a stolen snapshot from being used to test codes offline.
+  return createHmac('sha256', encryptionKey).update(`email-verification:v1:${userId}:${code}`).digest('hex');
+}
+function newEmailVerificationCode() { return String(randomInt(0, 1_000_000)).padStart(6, '0'); }
+function verificationWindow(record, field, timestamp) {
+  const startedAt = Date.parse(record?.[field] || '');
+  return Number.isFinite(startedAt) && timestamp - startedAt < emailVerificationThrottleWindowMs ? startedAt : timestamp;
+}
+function issueEmailVerification(user, timestamp = Date.now()) {
+  const existing = user.emailVerification && typeof user.emailVerification === 'object' ? user.emailVerification : {};
+  const sendWindowStartedAt = verificationWindow(existing, 'sendWindowStartedAt', timestamp);
+  const sendCount = sendWindowStartedAt === Date.parse(existing.sendWindowStartedAt || '') ? Number(existing.sendCount || 0) : 0;
+  if (sendCount >= emailVerificationSendLimit) throw Object.assign(new Error('Too many verification emails. Please wait before trying again.'), { status: 429, retryAfter: Math.max(1, Math.ceil((sendWindowStartedAt + emailVerificationThrottleWindowMs - timestamp) / 1000)) });
+  const code = newEmailVerificationCode();
+  user.emailVerification = {
+    codeHash: emailVerificationCodeHash(user.id, code),
+    issuedAt: new Date(timestamp).toISOString(),
+    expiresAt: new Date(timestamp + emailVerificationTtlMs).toISOString(),
+    lastSentAt: new Date(timestamp).toISOString(),
+    sendWindowStartedAt: new Date(sendWindowStartedAt).toISOString(),
+    sendCount: sendCount + 1,
+    verifyWindowStartedAt: new Date(timestamp).toISOString(),
+    verifyAttempts: 0
+  };
+  return code;
+}
+function consumeEmailVerification(user, code, timestamp = Date.now()) {
+  const verification = user.emailVerification;
+  if (!verification || typeof verification !== 'object' || !/^\d{6}$/.test(code) || Date.parse(verification.expiresAt || '') <= timestamp) return { ok: false };
+  const verifyWindowStartedAt = verificationWindow(verification, 'verifyWindowStartedAt', timestamp);
+  const verifyAttempts = verifyWindowStartedAt === Date.parse(verification.verifyWindowStartedAt || '') ? Number(verification.verifyAttempts || 0) : 0;
+  if (verifyAttempts >= emailVerificationAttemptLimit) throw Object.assign(new Error('Too many verification attempts. Please wait before trying again.'), { status: 429, retryAfter: Math.max(1, Math.ceil((verifyWindowStartedAt + emailVerificationThrottleWindowMs - timestamp) / 1000)) });
+  const actual = emailVerificationCodeHash(user.id, code);
+  const expected = String(verification.codeHash || '');
+  const matches = actual.length === expected.length && timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+  if (!matches) {
+    user.emailVerification = { ...verification, verifyWindowStartedAt: new Date(verifyWindowStartedAt).toISOString(), verifyAttempts: verifyAttempts + 1 };
+    return { ok: false };
+  }
+  delete user.emailVerification;
+  user.emailVerifiedAt = new Date(timestamp).toISOString();
+  return { ok: true };
+}
+async function sendEmailVerificationCode(email, code) {
+  // Test mode is intentionally checked first, so automated tests cannot send
+  // mail even when a developer happens to have a local Resend .env file.
+  if (!isProduction && process.env.EMAIL_VERIFICATION_TEST_DELIVERY_FAILURE === 'true') throw new Error('Email verification delivery test failure.');
+  if (emailVerificationTestMode()) return { provider: 'mock', delivered: false, testCode: code };
+  const config = emailVerificationDeliveryConfig();
+  if (!config) {
+    if (isProduction) throw Object.assign(new Error('Email verification is temporarily unavailable. Please try again later.'), { status: 503 });
+    return { provider: 'mock', delivered: false };
+  }
+  let response;
+  try {
+    response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        from: config.from,
+        to: [email],
+        subject: 'Your NIOS Best Academy verification code',
+        text: `Your NIOS Best Academy email verification code is: ${code}\n\nIt expires in 10 minutes. Never share this code with anyone, including academy staff. If you did not create an account, you can ignore this email.`
+      }),
+      signal: AbortSignal.timeout(12_000)
+    });
+  } catch {
+    throw Object.assign(new Error('Email verification is temporarily unavailable. Please try again later.'), { status: 503 });
+  }
+  if (!response.ok) throw Object.assign(new Error('Email verification is temporarily unavailable. Please try again later.'), { status: 503 });
+  return { provider: 'resend', delivered: true };
+}
+function verificationSnapshot(user) {
+  return user?.emailVerification && typeof user.emailVerification === 'object' ? { ...user.emailVerification } : null;
+}
+async function restoreEmailVerificationAfterDeliveryFailure(prepared, source) {
+  if (!prepared?.shouldDeliver || !prepared.email || !prepared.code) return;
+  await updateState(state => {
+    const user = state.users.find(item => item.id === prepared.userId && String(item.email || '').toLowerCase() === prepared.email);
+    if (!user || user.role !== 'student' || studentEmailIsVerified(user)) return;
+    // Do not undo a newer successful resend. If this is still the code whose
+    // delivery failed, restore the prior usable code; otherwise remove only
+    // the failed first-code so the learner can use the resend control.
+    const failedHash = emailVerificationCodeHash(user.id, prepared.code);
+    if (user.emailVerification?.codeHash === failedHash) {
+      if (prepared.previousVerification && Date.parse(prepared.previousVerification.expiresAt || '') > Date.now()) user.emailVerification = prepared.previousVerification;
+      else delete user.emailVerification;
+    }
+    state.audit.push({ id: uid('audit'), at: now(), action: 'student.email-verification-delivery-failed', studentId: user.studentId, source });
+  });
+}
+async function deliverPreparedEmailVerification(prepared, source) {
+  if (!prepared?.shouldDeliver) return { attempted: false, failed: false, delivery: null };
+  try {
+    return { attempted: true, failed: false, delivery: await sendEmailVerificationCode(prepared.email, prepared.code) };
+  } catch (error) {
+    await restoreEmailVerificationAfterDeliveryFailure(prepared, source);
+    // Keep provider errors out of public responses. This audit record lets an
+    // administrator diagnose the outage without leaking mail-provider detail.
+    console.warn('Email verification delivery failed:', String(error?.message || 'provider unavailable').slice(0, 300));
+    return { attempted: true, failed: true, delivery: null };
+  }
+}
 function b64(value) { return Buffer.from(value).toString('base64url'); }
-function issueSession(user) { const payload = b64(JSON.stringify({ sub: user.id, studentId: user.studentId || null, role: user.role, exp: Date.now() + 1000 * 60 * 60 * 12 })); const signature = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); return `${payload}.${signature}`; }
+function issueSession(user) { if (!studentEmailIsVerified(user)) throw Object.assign(new Error('Verify your email address before signing in.'), { status: 403 }); const payload = b64(JSON.stringify({ sub: user.id, studentId: user.studentId || null, role: user.role, emailVerified: user.role === 'student', exp: Date.now() + 1000 * 60 * 60 * 12 })); const signature = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); return `${payload}.${signature}`; }
 function cookieValue(request, name) { const match = String(request.headers.cookie || '').split(';').map(item => item.trim()).find(item => item.startsWith(`${name}=`)); return match ? decodeURIComponent(match.slice(name.length + 1)) : ''; }
-function readSession(request) { const bearer = isProduction ? '' : String(request.headers.authorization || '').replace(/^Bearer\s+/i, ''); const token = cookieValue(request, 'nios_session') || bearer; const [payload, signature] = token.split('.'); if (!payload || !signature) return null; const expected = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null; try { const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return claims.exp > Date.now() ? claims : null; } catch { return null; } }
+function readSession(request) { const bearer = isProduction ? '' : String(request.headers.authorization || '').replace(/^Bearer\s+/i, ''); const token = cookieValue(request, 'nios_session') || bearer; const [payload, signature] = token.split('.'); if (!payload || !signature) return null; const expected = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null; try { const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return claims.exp > Date.now() && (claims.role !== 'student' || claims.emailVerified === true) ? claims : null; } catch { return null; } }
 
 function initialState() {
   return {
-      users: demosEnabled ? [{ id: 'user_demo_aarav', studentId: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', passwordHash: hashPassword('student123'), role: 'student', createdAt: now() }, { id: 'user_admin', name: 'Academy Admin', email: 'admin@niosbest.in', passwordHash: hashPassword('admin123'), role: 'admin', createdAt: now() }, { id: 'user_teacher_science', name: 'Dr. Meera Iyer', email: 'teacher@niosbest.in', passwordHash: hashPassword('teacher123'), role: 'teacher', createdAt: now() }] : [],
+      users: demosEnabled ? [{ id: 'user_demo_aarav', studentId: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', passwordHash: hashPassword('student123'), role: 'student', emailVerifiedAt: now(), createdAt: now() }, { id: 'user_admin', name: 'Academy Admin', email: 'admin@niosbest.in', passwordHash: hashPassword('admin123'), role: 'admin', createdAt: now() }, { id: 'user_teacher_science', name: 'Dr. Meera Iyer', email: 'teacher@niosbest.in', passwordHash: hashPassword('teacher123'), role: 'teacher', createdAt: now() }] : [],
       students: demosEnabled ? [{ id: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', phone: '+919999999999', board: 'NIOS', boardCode: 'NIOS', classLevel: '12', referenceNumber: 'RF-26-0920-184', subjects: [{ code: '302', name: 'English', tmaStatus: 'Submitted', practicalGuide: false, progress: 78 }, { code: '311', name: 'Mathematics', tmaStatus: 'In progress', practicalGuide: false, progress: 62 }, { code: '312', name: 'Physics', tmaStatus: 'Draft due', practicalGuide: true, progress: 54 }, { code: '313', name: 'Chemistry', tmaStatus: 'Pending', practicalGuide: true, progress: 41 }, { code: '314', name: 'Biology', tmaStatus: 'Pending', practicalGuide: true, progress: 36 }], createdAt: now() }] : [],
       vault: demosEnabled ? { 'demo-aarav': encrypt({ enrollmentNumber: '123456789012', referenceNumber: 'RF-26-0920-184', dateOfBirth: '2007-08-14', boardCode: 'NIOS', consent: true, consentedAt: now() }) } : {}, vaultRecovery: {},
       documents: demosEnabled ? [
@@ -180,7 +322,7 @@ await updateState(state => {
     state.users.push({ id: uid('user'), name: 'Academy Administrator', email: bootstrapAdminEmail, passwordHash: hashPassword(bootstrapAdminPassword), role: 'admin', createdAt: now(), bootstrap: true });
   }
   if (demosEnabled) {
-    if (!state.users.some(user => user.email === 'aarav@example.com')) state.users.push({ id: 'user_demo_aarav', studentId: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', passwordHash: hashPassword('student123'), role: 'student', createdAt: now() });
+    if (!state.users.some(user => user.email === 'aarav@example.com')) state.users.push({ id: 'user_demo_aarav', studentId: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', passwordHash: hashPassword('student123'), role: 'student', emailVerifiedAt: now(), createdAt: now() });
     if (!state.users.some(user => user.email === 'admin@niosbest.in')) state.users.push({ id: 'user_admin', name: 'Academy Admin', email: 'admin@niosbest.in', passwordHash: hashPassword('admin123'), role: 'admin', createdAt: now() });
     if (!state.users.some(user => user.email === 'teacher@niosbest.in')) state.users.push({ id: 'user_teacher_science', name: 'Dr. Meera Iyer', email: 'teacher@niosbest.in', passwordHash: hashPassword('teacher123'), role: 'teacher', permissions: { manageLiveClasses: true, manageHomework: true, manageMaterials: true, gradeSubmissions: true, allowedBatchIds: ['batch_class12_stream1'] }, createdAt: now() });
   }
@@ -189,7 +331,12 @@ await updateState(state => {
     if (!owner) { owner = { id: uid('user'), name: 'Academy Owner', email, passwordHash: hashPassword(randomBytes(32).toString('hex')), role: 'admin', superAdmin: true, protectedAccount: true, requiresPasswordSetup: true, createdAt: now() }; state.users.push(owner); }
     owner.role = 'admin'; owner.superAdmin = true; owner.protectedAccount = true;
   }
-  for (const user of state.users) { if (user.role === 'teacher' && !user.permissions) user.permissions = defaultTeacherPermissions(); if (!isProduction && user.email === 'admin@niosbest.in') user.superAdmin = true; }
+  for (const user of state.users) {
+    if (user.role === 'teacher' && !user.permissions) user.permissions = defaultTeacherPermissions();
+    if (!isProduction && user.email === 'admin@niosbest.in') user.superAdmin = true;
+    // Demo accounts predate email OTP and are only ever seeded in non-production.
+    if (demosEnabled && user.email === 'aarav@example.com' && !user.emailVerifiedAt) user.emailVerifiedAt = now();
+  }
   if (!Array.isArray(state.batches)) state.batches = seedBatches();
   if (!Array.isArray(state.syncLogs)) state.syncLogs = [];
   for (const key of ['payments', 'enrollments', 'liveClasses', 'attendance', 'homework', 'submissions', 'materials', 'admissionDocuments', 'enquiries']) if (!Array.isArray(state[key])) state[key] = [];
@@ -227,12 +374,81 @@ function emit(studentId, type, payload) {
   void forwardWebhook(event);
   return event;
 }
-const requiredAdmissionDocuments = [
-  { type: 'IDENTITY', label: 'Identity proof' },
-  { type: 'PHOTO', label: 'Recent passport photograph' },
-  { type: 'SIGNATURE', label: 'Signature image' },
-  { type: 'PREVIOUS_ACADEMIC', label: 'Previous marksheet or transfer certificate' }
-];
+// This is an academy intake checklist, not a promise that a document will be
+// accepted by NIOS. Requirements can differ by class, stream, learner history
+// and the current NIOS notice; the academy must review each application before
+// submitting an official admission.
+const admissionDocumentLimits = Object.freeze({
+  pdfBytes: 6 * 1024 * 1024,
+  imageBytes: 1 * 1024 * 1024,
+  all: Object.freeze(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']),
+  imageOnly: Object.freeze(['image/jpeg', 'image/png', 'image/webp'])
+});
+const requiredAdmissionDocuments = Object.freeze([
+  {
+    type: 'IDENTITY', label: 'Identity proof', required: true,
+    description: 'Aadhaar, passport, ration card, or another valid government-issued photo ID.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'DATE_OF_BIRTH', label: 'Proof of date of birth', required: true,
+    description: 'A current NIOS-accepted date-of-birth record, such as a birth/municipal certificate, Aadhaar showing the full date of birth, or a school/secondary record; an MLC may be considered for an orphaned or street child case.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'EDUCATIONAL_QUALIFICATION', label: 'Educational qualification proof', required: true,
+    description: 'Class 10: school leaving/academic record as applicable. Class 12: Class 10/11 marksheet as applicable.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'RESIDENCE', label: 'Proof of residence', required: true,
+    description: 'Aadhaar, rent agreement, or another valid address proof.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'PHOTO', label: 'Recent passport-size photograph', required: true,
+    description: 'A clear, recent colour photograph. Upload an image file only.',
+    acceptedMimeTypes: admissionDocumentLimits.imageOnly
+  },
+  {
+    type: 'SIGNATURE', label: 'Signature image', required: true,
+    description: 'A clear image of the applicant’s signature on a plain background.',
+    acceptedMimeTypes: admissionDocumentLimits.imageOnly
+  }
+]);
+const conditionalAdmissionDocuments = Object.freeze([
+  {
+    type: 'TOC_OR_READMISSION_MARKSHEET', label: 'TOC / re-admission marksheet', conditional: true,
+    description: 'Upload original failed or compartment marksheets only when applying for Transfer of Credit (TOC), re-admission, or a similar case.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'CATEGORY_CERTIFICATE', label: 'Category certificate', conditional: true,
+    description: 'SC/ST/OBC certificate, if a category claim is being made.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'DISABILITY_CERTIFICATE', label: 'Disability certificate', conditional: true,
+    description: 'For a learner requesting consideration as a differently-abled student.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'EX_SERVICEMAN_CERTIFICATE', label: 'Ex-serviceman certificate', conditional: true,
+    description: 'Only if this status is relevant to the application.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'FOREIGN_EQUIVALENCE_CERTIFICATE', label: 'Foreign qualification equivalence certificate', conditional: true,
+    description: 'For foreign qualifications, upload the applicable embassy/equivalence certificate.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  },
+  {
+    type: 'OTHER_SUPPORTING_DOCUMENT', label: 'Other supporting document', conditional: true,
+    description: 'Only when the academy has asked for an additional document. Do not upload passwords, OTPs, bank details, or unrelated records.',
+    acceptedMimeTypes: admissionDocumentLimits.all
+  }
+]);
+const admissionDocumentRequirements = Object.freeze([...requiredAdmissionDocuments, ...conditionalAdmissionDocuments]);
 function validDateOfBirth(value) {
   const source = String(value || '').trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(source)) return null;
@@ -325,12 +541,34 @@ function awsKey(dateStamp, region, service, secret) {
   return hmac(hmac(hmac(hmac(`AWS4${secret}`, dateStamp), region), service), 'aws4_request');
 }
 function awsDate(date = new Date()) { return date.toISOString().replace(/[:-]|\.\d{3}/g, ''); }
-function encodeObjectKey(key) { return key.split('/').map(encodeURIComponent).join('/'); }
+function storageObjectKey(key) {
+  const source = String(key || '');
+  // Object keys are created only by server-side code. Keeping them relative
+  // and segment-safe is especially important for the local development
+  // driver, where a key ultimately becomes a filesystem path.
+  if (!source || source.length > 1024 || source.includes('\0') || source.startsWith('/') || source.includes('\\') || source.split('/').some(segment => !segment || segment === '.' || segment === '..')) {
+    throw new Error('Invalid storage object key.');
+  }
+  return source;
+}
+function encodeObjectKey(key) { return storageObjectKey(key).split('/').map(encodeURIComponent).join('/'); }
+function localStoragePath(key) {
+  const destination = resolve(filesDir, storageObjectKey(key));
+  const fromStorageRoot = relative(filesDir, destination);
+  if (!fromStorageRoot || fromStorageRoot === '..' || fromStorageRoot.startsWith(`..${sep}`) || isAbsolute(fromStorageRoot)) throw new Error('Storage path escapes the local storage directory.');
+  return destination;
+}
 async function s3Request(method, key, body, contentType = 'application/octet-stream') {
-  const bucket = process.env.S3_BUCKET, region = process.env.S3_REGION || 'ap-south-1', accessKey = process.env.S3_ACCESS_KEY_ID, secret = process.env.S3_SECRET_ACCESS_KEY;
-  if (!bucket || !accessKey || !secret) throw new Error('S3_BUCKET, S3_ACCESS_KEY_ID, and S3_SECRET_ACCESS_KEY are required for S3 storage.');
-  const host = process.env.S3_ENDPOINT ? new URL(process.env.S3_ENDPOINT).host : `${bucket}.s3.${region}.amazonaws.com`;
-  const scheme = process.env.S3_ENDPOINT ? new URL(process.env.S3_ENDPOINT).protocol : 'https:';
+  const bucket = String(process.env.S3_BUCKET || '').trim(), region = String(process.env.S3_REGION || '').trim(), accessKey = String(process.env.S3_ACCESS_KEY_ID || '').trim(), secret = String(process.env.S3_SECRET_ACCESS_KEY || '').trim();
+  if (!bucket || !region || !accessKey || !secret) throw new Error('S3_BUCKET, S3_REGION, S3_ACCESS_KEY_ID, and S3_SECRET_ACCESS_KEY are required for S3 storage.');
+  const endpointError = s3EndpointConfigurationError(process.env.S3_ENDPOINT);
+  if (endpointError) throw new Error(`S3_ENDPOINT must be ${endpointError}.`);
+  let endpoint = null;
+  if (String(process.env.S3_ENDPOINT || '').trim()) {
+    endpoint = new URL(process.env.S3_ENDPOINT);
+  }
+  const host = endpoint ? endpoint.host : `${bucket}.s3.${region}.amazonaws.com`;
+  const scheme = endpoint ? endpoint.protocol : 'https:';
   const uri = `/${encodeObjectKey(key)}`;
   const amz = awsDate(), date = amz.slice(0, 8), payloadHash = createHash('sha256').update(body || '').digest('hex');
   const canonicalHeaders = `content-type:${contentType}\nhost:${host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amz}\n`;
@@ -358,23 +596,74 @@ async function supabaseRequest(method, key, body, contentType = 'application/oct
 }
 const storage = {
   async put(key, bytes, contentType) {
-    if (process.env.STORAGE_DRIVER === 's3') { await s3Request('PUT', key, bytes, contentType); return { key, provider: 's3' }; }
-    if (process.env.STORAGE_DRIVER === 'supabase') { await supabaseRequest('POST', key, bytes, contentType); return { key, provider: 'supabase' }; }
-    const destination = join(filesDir, normalize(key).replace(/^([.][.][\\/])+/, ''));
+    if (normalizedStorageDriver === 's3') { await s3Request('PUT', key, bytes, contentType); return { key, provider: 's3' }; }
+    if (normalizedStorageDriver === 'supabase') { await supabaseRequest('POST', key, bytes, contentType); return { key, provider: 'supabase' }; }
+    const destination = localStoragePath(key);
     await mkdir(dirname(destination), { recursive: true }); await writeFile(destination, bytes); return { key, provider: 'local' };
   },
   async get(key) {
-    if (process.env.STORAGE_DRIVER === 's3') {
+    if (normalizedStorageDriver === 's3') {
       const response = await s3Request('GET', key, null);
       return { bytes: Buffer.from(await response.arrayBuffer()), provider: 's3' };
     }
-    if (process.env.STORAGE_DRIVER === 'supabase') {
+    if (normalizedStorageDriver === 'supabase') {
       const response = await supabaseRequest('GET', key, null);
       return { bytes: Buffer.from(await response.arrayBuffer()), provider: 'supabase' };
     }
-    return { bytes: await readFile(join(filesDir, normalize(key).replace(/^([.][.][\\/])+/, ''))), provider: 'local' };
+    return { bytes: await readFile(localStoragePath(key)), provider: 'local' };
+  },
+  async remove(key) {
+    // This is intentionally an exact-object operation, never a prefix or
+    // recursive delete. Admission replacement code additionally verifies the
+    // enrollment-owned `admissions/<enrollment>/` prefix before calling it.
+    const objectKey = storageObjectKey(key);
+    if (normalizedStorageDriver === 's3') { await s3Request('DELETE', objectKey, null); return { key: objectKey, provider: 's3' }; }
+    if (normalizedStorageDriver === 'supabase') { await supabaseRequest('DELETE', objectKey, null); return { key: objectKey, provider: 'supabase' }; }
+    try { await unlink(localStoragePath(objectKey)); }
+    catch (error) { if (error?.code !== 'ENOENT') throw error; }
+    return { key: objectKey, provider: 'local' };
   }
 };
+
+function isEnrollmentAdmissionStorageKey(key, enrollmentId) {
+  try { return storageObjectKey(key).startsWith(`admissions/${String(enrollmentId)}/`); }
+  catch { return false; }
+}
+async function recordAdmissionDocumentCleanup({ enrollmentId, studentId, documentType, outcome }) {
+  // Cleanup auditing is best-effort. A successfully stored replacement must
+  // remain usable even if an audit write encounters a transient failure.
+  try {
+    await updateState(state => {
+      state.audit.push({
+        id: uid('audit'), at: now(), action: `admission.document-replacement-cleanup-${outcome}`,
+        enrollmentId, studentId, documentType
+      });
+    });
+  } catch (error) { console.warn('Admission document cleanup audit could not be recorded:', error.message); }
+}
+async function cleanupSupersededAdmissionDocument({ enrollmentId, studentId, documentType, previousStorageKey, replacementStorageKey }) {
+  if (!previousStorageKey || previousStorageKey === replacementStorageKey) return;
+  // Never remove an object unless its exact key is in this enrollment's
+  // admission namespace. This prevents a malformed legacy row from deleting
+  // a different learner's file or a shared resource.
+  if (!isEnrollmentAdmissionStorageKey(previousStorageKey, enrollmentId)) {
+    console.warn('Refused to remove an admission object outside its enrollment namespace.');
+    await recordAdmissionDocumentCleanup({ enrollmentId, studentId, documentType, outcome: 'skipped' });
+    return;
+  }
+  try { await storage.remove(previousStorageKey); }
+  catch (error) {
+    console.warn('Superseded admission document could not be removed:', error.message);
+    await recordAdmissionDocumentCleanup({ enrollmentId, studentId, documentType, outcome: 'failed' });
+    return;
+  }
+  await recordAdmissionDocumentCleanup({ enrollmentId, studentId, documentType, outcome: 'deleted' });
+}
+async function cleanupUncommittedAdmissionDocument({ enrollmentId, storageKey }) {
+  if (!isEnrollmentAdmissionStorageKey(storageKey, enrollmentId)) return;
+  try { await storage.remove(storageKey); }
+  catch (error) { console.error('Uncommitted admission document cleanup failed:', error.message); }
+}
 
 let zoomToken = null;
 async function zoomAccessToken() {
@@ -460,6 +749,10 @@ function provider() {
 }
 const running = new Set();
 async function performSync(studentId, jobId) {
+  // A scheduled callback can outlive a configuration change or a deployment.
+  // Never contact the official connector, download documents, or mutate an
+  // ephemeral production store when durable writes are not ready.
+  if (isProduction && !productionWritesReady) return;
   if (running.has(studentId)) return;
   running.add(studentId);
   try {
@@ -494,11 +787,21 @@ async function performSync(studentId, jobId) {
   } finally { running.delete(studentId); }
 }
 async function queueSync(studentId, trigger = 'manual') {
+  // API handlers have a general production-write gate, but this function is
+  // also called by the scheduler and administrative workflow. Keep the rule
+  // at the queue boundary so no internal path can create a transient job.
+  if (isProduction && !productionWritesReady) {
+    throw Object.assign(new Error('Official sync is unavailable until durable database and document storage are configured.'), { status: 503, code: 'DURABLE_STATE_REQUIRED' });
+  }
   const job = await updateState(data => { const created = { id: uid('job'), studentId, trigger, status: 'queued', syncState: 'PENDING', createdAt: now(), updatedAt: now() }; data.jobs.push(created); data.syncLogs.push({ id: uid('sync-log'), at: now(), studentId, jobId: created.id, status: 'PENDING', phase: 'queued', trigger }); data.audit.push({ id: uid('audit'), at: now(), action: 'sync.queued', studentId, jobId: created.id, trigger }); return created; });
   setTimeout(() => void performSync(studentId, job.id), 50); return job;
 }
 const minutes = Math.max(5, Number(process.env.SYNC_INTERVAL_MINUTES || 15));
-if (process.env.NIOS_SYNC_MODE === 'official') setInterval(async () => { const state = await readState(); for (const student of state.students) if (state.vault[student.id]) await queueSync(student.id, 'scheduled'); }, minutes * 60_000).unref();
+if (process.env.NIOS_SYNC_MODE === 'official' && (!isProduction || productionWritesReady)) setInterval(async () => {
+  if (isProduction && !productionWritesReady) return;
+  const state = await readState();
+  for (const student of state.students) if (state.vault[student.id]) await queueSync(student.id, 'scheduled');
+}, minutes * 60_000).unref();
 
 function send(response, status, body, headers = {}) {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers }); response.end(JSON.stringify(body));
@@ -518,7 +821,9 @@ const authAttempts = new Map();
 const authThrottleWindowMs = 15 * 60_000;
 function throttleFingerprint(value) { return createHash('sha256').update(String(value || '').trim().toLowerCase()).digest('hex').slice(0, 24); }
 function authThrottleKey(request, scope, identity) {
-  const forwarded = String(request.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  // Forwarded headers are client-controlled unless this service is explicitly
+  // deployed behind a trusted proxy that sanitizes them.
+  const forwarded = process.env.TRUST_PROXY === 'true' ? String(request.headers['x-forwarded-for'] || '').split(',')[0].trim() : '';
   const remote = forwarded || request.socket.remoteAddress || 'unknown';
   return `${scope}:${throttleFingerprint(remote)}:${throttleFingerprint(identity)}`;
 }
@@ -543,18 +848,17 @@ function detectedUploadMime(bytes) {
   return '';
 }
 function integrationReadiness(state) {
-  const storageDriver = String(process.env.STORAGE_DRIVER || 'local').trim().toLowerCase();
+  const storageDriver = normalizedStorageDriver;
   const paymentProvider = String(process.env.PAYMENT_PROVIDER || 'mock').trim().toLowerCase();
   const notificationProvider = String(process.env.NOTIFICATION_PROVIDER || 'mock').trim().toLowerCase();
   const configured = names => names.filter(name => !String(process.env[name] || '').trim());
   const latestDelivery = [...(state.enrollments || [])].filter(item => item.intakeNotice?.attemptedAt).sort((a, b) => String(b.intakeNotice.attemptedAt).localeCompare(String(a.intakeNotice.attemptedAt)))[0]?.intakeNotice || null;
-  const storageRequirements = storageDriver === 'supabase' ? ['SUPABASE_URL', 'SUPABASE_BUCKET', 'SUPABASE_SERVICE_ROLE_KEY'] : storageDriver === 's3' ? ['S3_BUCKET', 'S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] : [];
   const paymentRequirements = paymentProvider === 'razorpay' ? ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'] : [];
   const emailRequirements = notificationProvider === 'resend-email' ? ['RESEND_API_KEY', 'ADMISSION_EMAIL_FROM'] : [];
   const niosMode = String(process.env.NIOS_SYNC_MODE || 'manual').trim().toLowerCase();
   const niosRequirements = niosMode === 'official' ? ['OFFICIAL_NIOS_CONNECTOR_URL', 'OFFICIAL_NIOS_CONNECTOR_TOKEN'] : [];
   return {
-    persistence: { ready: stateStore.durable && ['supabase', 's3'].includes(storageDriver), store: stateStore.publicStatus(), storageDriver },
+    persistence: { ready: stateStore.durable && durableFileStorage, store: stateStore.publicStatus(), storageDriver, missing: storageConfigurationMissing },
     payments: { provider: paymentProvider, ready: paymentProvider === 'razorpay' && configured(paymentRequirements).length === 0, missing: configured(paymentRequirements) },
     email: { provider: notificationProvider, ready: notificationProvider === 'resend-email' && configured(emailRequirements).length === 0, missing: configured(emailRequirements), latestIntakeDelivery: latestDelivery ? { status: latestDelivery.status, provider: latestDelivery.provider, attemptedAt: latestDelivery.attemptedAt, error: latestDelivery.error || null } : null },
     zoom: { ready: configured(['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_HOST_USER_ID']).length === 0, missing: configured(['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_HOST_USER_ID']) },
@@ -641,7 +945,7 @@ async function integrationDiagnostics(state, { probe = false } = {}) {
       checked: false,
       configured: supabase.valid,
       missing: supabase.missing,
-      storageDriver: String(process.env.STORAGE_DRIVER || 'local').trim().toLowerCase(),
+      storageDriver: normalizedStorageDriver,
       nextAction: supabase.valid ? 'Use Verify connections to check the private bucket and portal-state migration without reading student records.' : 'Set SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and SUPABASE_BUCKET on the server.'
     }
   };
@@ -790,7 +1094,20 @@ function filePayload(input, maxBytes = 6 * 1024 * 1024) {
   if (detectedUploadMime(bytes) !== mimeType) throw Object.assign(new Error('The file contents do not match the selected file type.'), { status: 422 });
   return { fileName: fileName.replace(/[^a-zA-Z0-9._ -]/g, '_'), mimeType, bytes };
 }
-function publicUser(user) { return { id: user.id, studentId: user.studentId || null, name: user.name, email: user.email, role: user.role, superAdmin: Boolean(user.superAdmin), permissions: user.role === 'teacher' ? user.permissions || defaultTeacherPermissions() : undefined }; }
+function admissionFilePayload(input, requirement) {
+  // PDFs may be up to the normal admission ceiling. Every image is deliberately
+  // capped much lower to keep protected student uploads quick and manageable.
+  const file = filePayload(input, admissionDocumentLimits.pdfBytes);
+  if (!requirement.acceptedMimeTypes.includes(file.mimeType)) {
+    const expected = requirement.acceptedMimeTypes === admissionDocumentLimits.imageOnly ? 'a JPG, PNG, or WEBP image' : 'a PDF, JPG, PNG, or WEBP file';
+    throw Object.assign(new Error(`${requirement.label} must be ${expected}.`), { status: 422 });
+  }
+  if (file.mimeType.startsWith('image/') && file.bytes.length > admissionDocumentLimits.imageBytes) {
+    throw Object.assign(new Error('Images for admission documents must be 1 MB or smaller. Please compress or retake the image before uploading.'), { status: 422 });
+  }
+  return file;
+}
+function publicUser(user) { return { id: user.id, studentId: user.studentId || null, name: user.name, email: user.email, role: user.role, emailVerified: studentEmailIsVerified(user), superAdmin: Boolean(user.superAdmin), permissions: user.role === 'teacher' ? user.permissions || defaultTeacherPermissions() : undefined }; }
 function sessionHeaders(user) {
   const token = issueSession(user);
   return {
@@ -957,12 +1274,16 @@ async function serveStatic(pathname, response, request) {
   if (!searchIndexingAllowed(request) && pathname === '/sitemap.xml') return send(response, 404, { error: 'Not found' });
   // Keep the legacy direct URL on the same clear owner-only staff experience.
   if (pathname === '/admin/staff' || pathname === '/admin-staff.html') pathname = '/admin-staff-v2.html';
-  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
+  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
   let requested = pathname === '/' ? '/index.html' : (aliases[pathname] || pathname);
   if (!extname(requested)) requested += '.html';
-  const protectedDesk = ['/dashboard', '/student-app', '/student-app.html', '/student-desk.html', '/active-student-dashboard.html', '/pending-admission-dashboard.html', '/payment-pending.html', '/batch-hub.html', '/live-classes', '/homework', '/checkout', '/checkout.html', '/checkout-v2.html', '/admission-intake', '/admission-intake.html', '/application-wizard.html', '/admission-wizard-v2.html'].includes(pathname);
-  const protectedAdmin = /^\/admin(?:[./-]|$)/.test(pathname) || pathname === '/admission-admin.html';
-  const protectedTeacher = ['/teacher-portal', '/teacher-portal.html', '/teacher-portal-v2.html'].includes(pathname);
+  // Authorize the final resolved page, not just the original URL. Otherwise
+  // `/active-student-dashboard`, `/admin-batches`, and similar extensionless
+  // private routes would gain a `.html` suffix after these flags were checked.
+  const requestedPage = requested;
+  const protectedDesk = new Set(['/active-student-dashboard.html', '/student-app.html', '/pending-admission-dashboard.html', '/payment-pending.html', '/batch-hub.html', '/checkout-v2.html', '/admission-wizard-v2.html']).has(requestedPage);
+  const protectedAdmin = /^\/admin(?:[./-]|$)/.test(requestedPage) || requestedPage === '/admission-admin.html';
+  const protectedTeacher = /^\/teacher-portal(?:[./-]|$)/.test(requestedPage);
   let sessionBootstrapRole = '';
   // A stale browser-side course draft must not take a paid learner back into
   // admission intake. Keep the server-authorized desk as the routing source.
@@ -984,7 +1305,7 @@ async function serveStatic(pathname, response, request) {
     const session = readSession(request);
     if (!['teacher', 'admin'].includes(session?.role)) requested = '/auth-v2.html';
     else sessionBootstrapRole = session.role;
-  } else if (protectedDesk) { const session = readSession(request); if (!session?.studentId) requested = '/auth-v2.html'; else { sessionBootstrapRole = 'student'; const state = await readState(), paid = paidEnrollment(state, session.studentId), application = applicationEnrollment(state, session.studentId), wantsStudentApp = pathname === '/student-app' || pathname === '/student-app.html'; if (wantsStudentApp && paid) requested = '/student-app.html'; else if (paid?.status === 'ACTIVE') requested = pathname === '/dashboard' || pathname === '/student-desk.html' || pathname === '/active-student-dashboard.html' ? '/active-student-dashboard.html' : '/batch-hub.html'; else requested = paid ? '/pending-admission-dashboard.html' : application ? '/payment-pending.html' : '/auth-v2.html'; } }
+  } else if (protectedDesk) { const session = readSession(request); if (!session?.studentId) requested = '/auth-v2.html'; else { sessionBootstrapRole = 'student'; const state = await readState(), paid = paidEnrollment(state, session.studentId), application = applicationEnrollment(state, session.studentId), wantsStudentApp = requestedPage === '/student-app.html', wantsDashboard = requestedPage === '/active-student-dashboard.html'; if (wantsStudentApp && paid) requested = '/student-app.html'; else if (paid?.status === 'ACTIVE') requested = wantsDashboard ? '/active-student-dashboard.html' : '/batch-hub.html'; else requested = paid ? '/pending-admission-dashboard.html' : application ? '/payment-pending.html' : '/auth-v2.html'; } }
   const file = resolve(root, `.${requested}`);
   if (!file.startsWith(root)) return send(response, 403, { error: 'Forbidden' });
   try {
@@ -1008,7 +1329,7 @@ async function serveStatic(pathname, response, request) {
       content = Buffer.from(content.toString('utf8').replaceAll('https://niosbest.in', publicOrigin.origin), 'utf8');
     }
     if (sessionBootstrapRole && extension === '.html') {
-      const bootstrap = `<script>try{if(!sessionStorage.getItem('niosSession'))sessionStorage.setItem('niosSession',JSON.stringify({id:'cookie-session',role:'${sessionBootstrapRole}'}));}catch{}</script>`;
+      const bootstrap = `<script>window.__niosSessionBootstrap=Object.freeze({id:'cookie-session',role:'${sessionBootstrapRole}'});try{if(!sessionStorage.getItem('niosSession'))sessionStorage.setItem('niosSession',JSON.stringify(window.__niosSessionBootstrap));}catch{}</script>`;
       content = Buffer.from(content.toString('utf8').replace('</head>', `${bootstrap}</head>`), 'utf8');
     }
     response.writeHead(200, headers); response.end(content);
@@ -1036,7 +1357,7 @@ const server = createServer(async (request, response) => {
         error: 'Admissions, document uploads, payments, and portal changes are temporarily unavailable while durable database storage is configured.',
         code: 'DURABLE_STATE_REQUIRED',
         stateStore: stateStore.publicStatus(),
-        storageDriver: String(process.env.STORAGE_DRIVER || 'local'),
+        storageDriver: normalizedStorageDriver,
         setup: 'Apply the portal-state migration and set PORTAL_STATE_DRIVER=supabase with the server-only Supabase variables.'
       });
     }
@@ -1064,7 +1385,7 @@ const server = createServer(async (request, response) => {
       ok: true,
       readyForWrites: productionWritesReady,
       mode: process.env.NIOS_SYNC_MODE || 'mock',
-      storage: process.env.STORAGE_DRIVER || 'local',
+      storage: normalizedStorageDriver,
       notificationProvider: process.env.NOTIFICATION_PROVIDER || 'mock',
       stateStore: stateStore.publicStatus(),
       durableFileStorage,
@@ -1076,31 +1397,95 @@ const server = createServer(async (request, response) => {
       const input = await body(request), name = String(input.name || '').trim(), email = String(input.email || '').trim().toLowerCase(), password = String(input.password || ''), phone = String(input.phone || '').trim();
       const throttleKey = enforceAuthThrottle(request, 'register', email || phone || 'unknown', 6);
       if (!isSafeString(name, 80) || !/^\S+@\S+\.\S+$/.test(email) || password.length < 8 || !isSafeString(phone, 30)) return send(response, 422, { error: 'Name, valid email, mobile number, and an 8-character password are required.' });
-      const user = await updateState(state => {
-        if (state.users.some(item => item.email === email)) throw Object.assign(new Error('An account with this email already exists.'), { status: 409 });
+      // A delivery failure can leave a pending, unverified record so a later
+      // resend can safely recover it. It never becomes a usable account until
+      // its mailbox holder completes verification; production never exposes a
+      // code in the response.
+      if (isProduction && !emailVerificationDeliveryConfig()) return send(response, 503, { error: 'Email verification is temporarily unavailable. Please try again later.' });
+      enforceAuthThrottle(request, 'email-verification-send-ip', 'all', 12);
+      const prepared = await updateState(state => {
+        const existing = state.users.find(item => String(item.email || '').toLowerCase() === email);
+        // Preserve a generic response for existing verified, staff, and
+        // password-mismatched accounts; none receive a sign-in session here.
+        if (existing) {
+          if (existing.role !== 'student' || studentEmailIsVerified(existing) || !matchesPassword(password, existing.passwordHash)) return { shouldDeliver: false, code: null };
+          const previousVerification = verificationSnapshot(existing);
+          const code = issueEmailVerification(existing);
+          state.audit.push({ id: uid('audit'), at: now(), action: 'student.email-verification-resent', studentId: existing.studentId });
+          return { shouldDeliver: true, code, email: existing.email, userId: existing.id, previousVerification };
+        }
         const studentId = uid('student');
         const created = { id: uid('user'), studentId, name, email, passwordHash: hashPassword(password), role: 'student', createdAt: now() };
+        const code = issueEmailVerification(created);
         state.users.push(created);
         state.students.push({ id: studentId, name, email, phone, board: 'NIOS', boardCode: 'NIOS', classLevel: 'Unselected', referenceNumber: `RF-${new Date().getFullYear()}-${randomBytes(4).toString('hex').toUpperCase()}`, subjects: [], createdAt: now() });
-        state.audit.push({ id: uid('audit'), at: now(), action: 'student.registered', studentId });
-        return created;
+        state.audit.push({ id: uid('audit'), at: now(), action: 'student.registered-pending-email-verification', studentId });
+        return { shouldDeliver: true, code, email, userId: created.id, previousVerification: null };
       });
-      const session = sessionHeaders(user);
+      const deliveryResult = await deliverPreparedEmailVerification(prepared, 'registration');
+      // The acknowledgement intentionally has the same shape for an existing
+      // address and a newly-created address, preventing account enumeration.
+      const acknowledgement = { accepted: true, verificationRequired: true, message: 'If this address can receive verification, a six-digit code has been sent. Enter it to finish creating your account.' };
+      if (emailVerificationTestMode() && deliveryResult.delivery?.testCode) acknowledgement.testCode = deliveryResult.delivery.testCode;
+      // Retain the registration throttle when a provider outage occurs so an
+      // unauthenticated caller cannot repeatedly hammer the mail provider.
+      if (!deliveryResult.failed) clearAuthThrottle(throttleKey);
+      return send(response, 202, acknowledgement);
+    }
+    if (method === 'POST' && path === '/api/auth/email-verification/resend') {
+      const input = await body(request), email = String(input.email || '').trim().toLowerCase();
+      if (!/^\S+@\S+\.\S+$/.test(email)) return send(response, 422, { error: 'Enter a valid email address.' });
+      if (isProduction && !emailVerificationDeliveryConfig()) return send(response, 503, { error: 'Email verification is temporarily unavailable. Please try again later.' });
+      enforceAuthThrottle(request, 'email-verification-resend', email, emailVerificationResendRequestLimit);
+      enforceAuthThrottle(request, 'email-verification-send-ip', 'all', 12);
+      const prepared = await updateState(state => {
+        const user = state.users.find(item => String(item.email || '').toLowerCase() === email);
+        if (!user || user.role !== 'student' || studentEmailIsVerified(user)) return { shouldDeliver: false, code: null };
+        const previousVerification = verificationSnapshot(user);
+        const code = issueEmailVerification(user);
+        state.audit.push({ id: uid('audit'), at: now(), action: 'student.email-verification-resent', studentId: user.studentId });
+        return { shouldDeliver: true, code, email: user.email, userId: user.id, previousVerification };
+      });
+      const deliveryResult = await deliverPreparedEmailVerification(prepared, 'resend');
+      const acknowledgement = { accepted: true, verificationRequired: true, message: 'If this address has an unverified account, a fresh six-digit code has been sent.' };
+      if (emailVerificationTestMode() && deliveryResult.delivery?.testCode) acknowledgement.testCode = deliveryResult.delivery.testCode;
+      return send(response, 202, acknowledgement);
+    }
+    if (method === 'POST' && path === '/api/auth/email-verification/verify') {
+      const input = await body(request), email = String(input.email || '').trim().toLowerCase(), code = String(input.code || '').trim(), password = String(input.password || ''), passwordConfirmation = String(input.passwordConfirmation || '');
+      if (!/^\S+@\S+\.\S+$/.test(email) || !/^\d{6}$/.test(code)) return send(response, 400, { error: 'That verification code is invalid or has expired.' });
+      // Registration is deliberately only a pending claim on an email address.
+      // Once the mailbox holder proves control with the code, they choose this
+      // final password so a pre-registration attacker cannot retain access.
+      if (password.length < 12 || password !== passwordConfirmation) return send(response, 422, { error: 'Choose and confirm a new password of at least 12 characters.' });
+      const throttleKey = enforceAuthThrottle(request, 'email-verification-verify', email, emailVerificationAttemptLimit);
+      const verified = await updateState(state => {
+        const user = state.users.find(item => String(item.email || '').toLowerCase() === email && item.role === 'student');
+        if (!user || studentEmailIsVerified(user)) return null;
+        const result = consumeEmailVerification(user, code);
+        if (!result.ok) return null;
+        user.passwordHash = hashPassword(password);
+        user.passwordUpdatedAt = now();
+        state.audit.push({ id: uid('audit'), at: now(), action: 'student.email-verified', studentId: user.studentId });
+        return user;
+      });
+      if (!verified) return send(response, 400, { error: 'That verification code is invalid or has expired.' });
+      const session = sessionHeaders(verified);
       clearAuthThrottle(throttleKey);
-      return send(response, 201, { user: publicUser(user), ...(isProduction ? {} : { token: session.token }) }, session.headers);
+      return send(response, 200, { user: publicUser(verified), ...(isProduction ? {} : { token: session.token }) }, session.headers);
     }
     if (method === 'POST' && path === '/api/auth/login') {
       const input = await body(request), email = String(input.email || '').trim().toLowerCase(), password = String(input.password || '');
       const throttleKey = enforceAuthThrottle(request, 'login', email || 'unknown', 8);
       const state = await readState(), user = state.users.find(item => item.email === email);
-      if (!user || !matchesPassword(password, user.passwordHash)) return send(response, 401, { error: 'We could not match those sign-in details.' });
+      if (!user || !matchesPassword(password, user.passwordHash) || !studentEmailIsVerified(user)) return send(response, 401, { error: 'We could not match those sign-in details or the email has not been verified.' });
       const session = sessionHeaders(user);
       clearAuthThrottle(throttleKey);
       return send(response, 200, { user: publicUser(user), ...(isProduction ? {} : { token: session.token }) }, session.headers);
     }
     if (method === 'POST' && path === '/api/auth/logout') return send(response, 200, { ok: true }, { 'set-cookie': `nios_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${isProduction ? '; Secure' : ''}` });
     if (method === 'POST' && path === '/api/auth/accept-invite') { const input = await body(request), token = String(input.token || ''), password = String(input.password || ''), throttleKey = enforceAuthThrottle(request, 'accept-invite', token || 'unknown', 8); if (token.length < 32 || password.length < 12) return send(response, 422, { error: 'Use a valid invitation and a password of at least 12 characters.' }); const tokenHash = createHash('sha256').update(token).digest('hex'); const accepted = await updateState(state => { const user = state.users.find(item => item.inviteTokenHash === tokenHash && Date.parse(item.inviteExpiresAt || '') > Date.now()); if (!user) throw Object.assign(new Error('This invitation is invalid or expired.'), { status: 410 }); user.passwordHash = hashPassword(password); user.requiresPasswordSetup = false; delete user.inviteTokenHash; delete user.inviteExpiresAt; user.passwordSetAt = now(); state.audit.push({ id: uid('audit'), at: now(), action: 'staff.invite-accepted', staffId: user.id, role: user.role }); return user; }); clearAuthThrottle(throttleKey); return send(response, 200, { user: publicUser(accepted) }); }
-    if (method === 'GET' && path === '/api/auth/me') { const session = readSession(request); if (!session) return send(response, 401, { error: 'Sign-in is required.' }); const state = await readState(), user = state.users.find(item => item.id === session.sub); if (!user) return send(response, 401, { error: 'Account not found.' }); const student = user.studentId ? state.students.find(item => item.id === user.studentId) : null; return send(response, 200, { user: publicUser(user), profile: student ? publicStudent(student, state) : null }); }
+    if (method === 'GET' && path === '/api/auth/me') { const session = readSession(request); if (!session) return send(response, 401, { error: 'Sign-in is required.' }); const state = await readState(), user = state.users.find(item => item.id === session.sub); if (!user || !studentEmailIsVerified(user)) return send(response, 401, { error: 'Sign-in is required.' }); const student = user.studentId ? state.students.find(item => item.id === user.studentId) : null; return send(response, 200, { user: publicUser(user), profile: student ? publicStudent(student, state) : null }); }
     if (method === 'POST' && path === '/api/enquiries') {
       const input = await body(request), name = String(input.name || '').trim(), email = String(input.email || '').trim().toLowerCase(), phone = String(input.phone || '').trim(), topic = String(input.topic || '').trim(), message = String(input.message || '').trim();
       if (!isSafeString(name, 80) || !/^\S+@\S+\.\S+$/.test(email) || !isSafeString(phone, 30) || !isSafeString(topic, 100) || !isSafeString(message, 2000)) return send(response, 422, { error: 'Name, email, mobile number, topic and a clear message are required.' });
@@ -1158,7 +1543,23 @@ const server = createServer(async (request, response) => {
       const state = await readState(), access = requireApplicationEnrollment(request, state, String(url.searchParams.get('batchId') || '')), student = state.students.find(item => item.id === access.session.studentId);
       const batch = state.batches.find(item => item.id === access.enrollment.batchId);
       const safeguards = admissionIntakeSafeguards(access.enrollment);
-      return send(response, 200, { profile: publicStudent(student, state), enrollment: publicEnrollment(access.enrollment, state), safeguards, subjectOptions: admissionSubjectOptions(batch), requiredDocuments: requiredAdmissionDocuments, documents: state.admissionDocuments.filter(item => item.enrollmentId === access.enrollment.id).map(publicAdmissionDocument), syncMode: process.env.NIOS_SYNC_MODE || 'manual', canSubmit: safeguards.ready && (access.enrollment.selectedSubjects || []).length > 0 && requiredAdmissionDocuments.every(requirement => state.admissionDocuments.some(document => document.enrollmentId === access.enrollment.id && document.type === requirement.type)) });
+      return send(response, 200, {
+        profile: publicStudent(student, state),
+        enrollment: publicEnrollment(access.enrollment, state),
+        safeguards,
+        subjectOptions: admissionSubjectOptions(batch),
+        requiredDocuments: requiredAdmissionDocuments,
+        conditionalDocuments: conditionalAdmissionDocuments,
+        uploadRules: {
+          pdfMaximumBytes: admissionDocumentLimits.pdfBytes,
+          imageMaximumBytes: admissionDocumentLimits.imageBytes,
+          supportedMimeTypes: admissionDocumentLimits.all,
+          note: 'This academy checklist is reviewed against the current NIOS requirements for the learner’s class, stream, and case. Upload conditional documents only when applicable or requested by the academy.'
+        },
+        documents: state.admissionDocuments.filter(item => item.enrollmentId === access.enrollment.id).map(publicAdmissionDocument),
+        syncMode: process.env.NIOS_SYNC_MODE || 'manual',
+        canSubmit: safeguards.ready && (access.enrollment.selectedSubjects || []).length > 0 && requiredAdmissionDocuments.every(requirement => state.admissionDocuments.some(document => document.enrollmentId === access.enrollment.id && document.type === requirement.type))
+      });
     }
     if (method === 'PUT' && path === '/api/admission/intake') {
       const state = await readState(), access = requireApplicationEnrollment(request, state), input = await body(request), batch = state.batches.find(item => item.id === access.enrollment.batchId), selectedSubjects = admissionSubjects(input.subjects, admissionSubjectOptions(batch));
@@ -1166,10 +1567,37 @@ const server = createServer(async (request, response) => {
       emit(access.session.studentId, 'admission.subjects-selected', { enrollmentId: updated.id }); return send(response, 200, publicEnrollment(updated, await readState()));
     }
     if (method === 'POST' && path === '/api/admission/documents') {
-      const state = await readState(), access = requireApplicationEnrollment(request, state), input = await body(request), type = String(input.type || '').trim(), requirement = requiredAdmissionDocuments.find(item => item.type === type); if (!requirement) return send(response, 422, { error: 'Choose a valid admission-document type.' });
+      const state = await readState(), access = requireApplicationEnrollment(request, state), input = await body(request), type = String(input.type || '').trim(), requirement = admissionDocumentRequirements.find(item => item.type === type); if (!requirement) return send(response, 422, { error: 'Choose a valid admission-document type.' });
       if (['DOCUMENTS_SUBMITTED_PENDING_PAYMENT', 'PAYMENT_CONFIRMED', 'VERIFICATION_IN_PROGRESS', 'ACTIVE'].includes(access.enrollment.status)) return send(response, 409, { error: 'Documents are locked while the application is under review.' });
-      const file = filePayload(input, 6 * 1024 * 1024), storageKey = `admissions/${access.enrollment.id}/${type}/${Date.now()}-${file.fileName}`; await storage.put(storageKey, file.bytes, file.mimeType);
-      const document = await updateState(data => { data.admissionDocuments = data.admissionDocuments.filter(item => !(item.enrollmentId === access.enrollment.id && item.type === type)); const created = { id: uid('admission-doc'), enrollmentId: access.enrollment.id, studentId: access.session.studentId, type, label: requirement.label, fileName: file.fileName, mimeType: file.mimeType, storageKey, status: 'RECEIVED', uploadedAt: now() }; data.admissionDocuments.push(created); const enrollment = data.enrollments.find(item => item.id === access.enrollment.id); if (enrollment && enrollment.status === 'PAYMENT_CONFIRMED') enrollment.status = 'DOCUMENTS_IN_PROGRESS'; if (enrollment) enrollment.updatedAt = now(); data.audit.push({ id: uid('audit'), at: now(), action: 'admission.document-uploaded', enrollmentId: access.enrollment.id, studentId: access.session.studentId, documentType: type }); return created; });
+      const file = admissionFilePayload(input, requirement);
+      // Process-local mitigation for repeated replacement churn. A shared edge
+      // limiter should additionally protect production across instances.
+      enforceAuthThrottle(request, 'admission-document-upload', `${access.enrollment.id}:${type}`, 12);
+      const storageKey = `admissions/${access.enrollment.id}/${type}/${Date.now()}-${file.fileName}`;
+      try { await storage.put(storageKey, file.bytes, file.mimeType); }
+      catch (error) { await cleanupUncommittedAdmissionDocument({ enrollmentId: access.enrollment.id, storageKey }); throw error; }
+      let persisted;
+      try {
+        persisted = await updateState(data => {
+          const previous = data.admissionDocuments.find(item => item.enrollmentId === access.enrollment.id && item.type === type) || null;
+          data.admissionDocuments = data.admissionDocuments.filter(item => !(item.enrollmentId === access.enrollment.id && item.type === type));
+          const created = { id: uid('admission-doc'), enrollmentId: access.enrollment.id, studentId: access.session.studentId, type, label: requirement.label, conditional: Boolean(requirement.conditional), fileName: file.fileName, mimeType: file.mimeType, storageKey, status: 'RECEIVED', uploadedAt: now() };
+          data.admissionDocuments.push(created);
+          const enrollment = data.enrollments.find(item => item.id === access.enrollment.id);
+          if (enrollment && enrollment.status === 'PAYMENT_CONFIRMED') enrollment.status = 'DOCUMENTS_IN_PROGRESS';
+          if (enrollment) enrollment.updatedAt = now();
+          data.audit.push({ id: uid('audit'), at: now(), action: 'admission.document-uploaded', enrollmentId: access.enrollment.id, studentId: access.session.studentId, documentType: type, conditional: Boolean(requirement.conditional), replaced: Boolean(previous) });
+          return { document: created, previousStorageKey: previous?.storageKey || null };
+        });
+      } catch (error) {
+        // Metadata did not persist, so the new object has no authorized owner.
+        // Delete only this just-created, enrollment-scoped object before
+        // returning the state error to the student.
+        await cleanupUncommittedAdmissionDocument({ enrollmentId: access.enrollment.id, storageKey });
+        throw error;
+      }
+      await cleanupSupersededAdmissionDocument({ enrollmentId: access.enrollment.id, studentId: access.session.studentId, documentType: type, previousStorageKey: persisted.previousStorageKey, replacementStorageKey: storageKey });
+      const document = persisted.document;
       emit(access.session.studentId, 'admission.document-uploaded', publicAdmissionDocument(document)); return send(response, 201, publicAdmissionDocument(document));
     }
     if (method === 'POST' && path === '/api/admission/submit') {

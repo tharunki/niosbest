@@ -37,6 +37,10 @@ assert.match(serverSource, /\/v2\/users\/\$\{encodeURIComponent\(hostUserId\)\}\
 assert.match(serverSource, /isProduction \? \{\} : \{ token: session\.token \}/);
 assert.match(serverSource, /detectedUploadMime\(bytes\) !== mimeType/);
 assert.match(serverSource, /captureResourceOrder\(data, capture\)/);
+assert.match(serverSource, /const requestedPage = requested;[\s\S]*protectedDesk/, 'private-page protection must be based on the resolved static route');
+assert.match(serverSource, /async function performSync\(studentId, jobId\) \{[\s\S]*?if \(isProduction && !productionWritesReady\) return;/, 'sync workers must not run against an unsafe production store');
+assert.match(serverSource, /async function queueSync\(studentId, trigger = 'manual'\) \{[\s\S]*?if \(isProduction && !productionWritesReady\)/, 'sync jobs must not be written when production durability is unavailable');
+assert.match(serverSource, /if \(process\.env\.NIOS_SYNC_MODE === 'official' && \(!isProduction \|\| productionWritesReady\)\) setInterval\(async \(\) => \{\s*if \(isProduction && !productionWritesReady\) return;/, 'the official-sync scheduler must stay idle until production durability is ready');
 
 const environment = {
   ...process.env,
@@ -67,8 +71,23 @@ async function api(path, { method = 'GET', body, cookie } = {}) {
   return { response, data: await response.json().catch(() => ({})), cookie: response.headers.get('set-cookie')?.split(';')[0] || '' };
 }
 
+async function page(path, cookie = '') {
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, { headers: cookie ? { cookie } : {} });
+  return { response, body: await response.text() };
+}
+
 try {
   await waitForService();
+
+  // Exercise extensionless versions of every private route family. The server
+  // must authenticate the resolved .html target, not only the raw request.
+  for (const path of ['/active-student-dashboard', '/student-desk', '/student-desk.html', '/student-app', '/student-app.html', '/pending-admission-dashboard', '/batch-hub', '/live-classes', '/homework', '/checkout', '/checkout-v2', '/admission-intake', '/admission-wizard-v2', '/admin-batches', '/admission-admin', '/teacher-portal-v2']) {
+    const protectedPage = await page(path);
+    assert.equal(protectedPage.response.status, 200, `${path} should return the sign-in shell rather than reveal a private page`);
+    assert.match(protectedPage.body, /id="loginForm"/, `${path} must require authentication after extensionless route resolution`);
+    assert.match(String(protectedPage.response.headers.get('cache-control')), /private, no-store/, `${path} must not be cached as a public page`);
+    assert.match(String(protectedPage.response.headers.get('x-robots-tag')), /noindex/i, `${path} must not be indexed as a private route`);
+  }
 
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const failed = await api('/api/auth/login', { method: 'POST', body: { email: 'throttle@example.test', password: 'wrong-password' } });
@@ -82,6 +101,8 @@ try {
   assert.equal(login.response.status, 200);
   assert.ok(login.cookie.startsWith('nios_session='));
   assert.equal(login.data.user.role, 'student');
+  const activeDesk = await page('/active-student-dashboard', login.cookie);
+  assert.match(activeDesk.body, /YOUR ACTIVE BATCH/, 'a signed-in active student may open the resolved desk route');
   const counselor = await api('/api/counselor', { method: 'POST', cookie: login.cookie, body: { message: 'What is my admission status?' } });
   assert.equal(counselor.response.status, 200);
   assert.equal(counselor.data.assistantType, 'academic-assistant');
@@ -113,6 +134,12 @@ try {
   assert.equal(nonAdminReadiness.response.status, 401);
   const adminLogin = await api('/api/auth/login', { method: 'POST', body: { email: 'admin@niosbest.in', password: 'admin123' } });
   assert.equal(adminLogin.response.status, 200);
+  const adminBatches = await page('/admin-batches', adminLogin.cookie);
+  assert.match(adminBatches.body, /Future batches/, 'an authenticated admin may open the resolved batch route');
+  const teacherLogin = await api('/api/auth/login', { method: 'POST', body: { email: 'teacher@niosbest.in', password: 'teacher123' } });
+  assert.equal(teacherLogin.response.status, 200);
+  const teacherPortal = await page('/teacher-portal-v2', teacherLogin.cookie);
+  assert.match(teacherPortal.body, /TEACHING OPERATIONS/, 'an authenticated teacher may open the resolved teacher route');
   const readiness = await api('/api/admin/health', { cookie: adminLogin.cookie });
   assert.equal(readiness.response.status, 200);
   assert.deepEqual(Object.keys(readiness.data.readiness.zoom).sort(), ['missing', 'ready']);
