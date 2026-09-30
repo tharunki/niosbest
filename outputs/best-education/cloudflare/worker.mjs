@@ -2665,11 +2665,12 @@ async function renderSitemap(request, env) {
   const fixed = pages.map((page) => sitemapEntry(origin, page));
   const sections = [...(await readSectionContexts(env)).values()].filter(sectionIsPubliclyVisible);
   const sectionUrls = sections.map((section) => sitemapEntry(origin, collectionUrl(section.slug), section.updatedAt));
-  // Do not publish product URLs to search engines until protected storage,
-  // payment verification, and the explicit sales switch are all ready.
-  const cards = canAcceptNewPayments(env)
-    ? (await readPublicCards(env)).filter((card) => card.fileKey)
-    : [];
+  // Publishing a card is the editor's explicit decision to make its public
+  // detail page discoverable. The separate sales switch still controls only
+  // whether checkout is offered: a published card can build its search
+  // presence while its protected PDF or payment checks are being prepared.
+  // `readPublicCards` already excludes drafts and cards in hidden sections.
+  const cards = await readPublicCards(env);
   const cardUrls = cards.map((card) => sitemapEntry(origin, `/paper/${card.slug}`, card.updatedAt));
   return text(`<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${[...fixed, ...sectionUrls, ...cardUrls].join('\n')}\n</urlset>\n`, 200, 'application/xml; charset=utf-8');
 }
@@ -2687,7 +2688,11 @@ function paperPageHtml(request, paper) {
   const title = paper.metaTitle || `${paper.title} | TK's SOLUTION`;
   const description = paper.metaDescription || paper.description || 'Chapter-wise study material for focused revision.';
   const keywords = paper.seoKeywords || (Array.isArray(paper.tags) ? paper.tags.join(', ') : '');
-  const indexable = paper.available && !isWorkersDev(request.url);
+  // A published database card has a stable public SEO URL even while sales
+  // are paused. `available` remains the stricter, separate condition used to
+  // show checkout. Seed placeholders deliberately have no `isPublished`
+  // flag, so they remain noindex until a real card replaces them.
+  const indexable = Boolean(paper.isPublished) && !isWorkersDev(request.url);
   const rawEducationalLevel = String(paper.displayClassName || paper.className || '').trim();
   const educationalLevel = /^\d+$/.test(rawEducationalLevel) ? `Class ${rawEducationalLevel}` : (rawEducationalLevel || 'School and competitive exam preparation');
   const learningResourceType = String(paper.displayType || paper.type || 'Study material');

@@ -194,7 +194,7 @@ const configuredButPausedEnv = { ...env, RAZORPAY_KEY_ID: 'rzp_test_checkout', R
 response = await worker.fetch(new Request(`${origin}/api/papers/slug/${paidCard.slug}`), configuredButPausedEnv);
 assert.equal((await response.json()).paper.available, false, 'a configured-but-paused payment system never advertises a buyable PDF');
 response = await worker.fetch(new Request(`${origin}/paper/${paidCard.slug}`), configuredButPausedEnv);
-assert.match(await response.text(), /noindex,nofollow/, 'a configured-but-paused paid paper is not indexable');
+assert.match(await response.text(), /index,follow/, 'a published card remains indexable while sales are paused');
 response = await worker.fetch(new Request(`${origin}/healthz`), configuredButPausedEnv);
 assert.equal((await response.json()).payments.ready, false, 'health keeps sales closed until the explicit payment switch is enabled');
 response = await worker.fetch(jsonRequest(`/api/checkout/${paidCard.slug}`, { buyerEmail: 'student@example.test', buyerName: 'Test Student' }), configuredButPausedEnv);
@@ -495,7 +495,8 @@ assert.equal(response.status, 200, `v5 graph backup restores atomically: ${JSON.
 
 response = await call(new Request(`${origin}/sitemap.xml`));
 let sitemap = await response.text();
-assert.doesNotMatch(sitemap, new RegExp(`/paper/${paidCard.slug}`), 'a paused payment system excludes paid papers from the sitemap');
+assert.match(sitemap, new RegExp(`/paper/${paidCard.slug}`), 'a published card is listed in the sitemap while sales are paused');
+assert.match(sitemap, new RegExp(`/paper/${genericCard.slug}`), 'a published card without a PDF is also listed for its public SEO page');
 response = await worker.fetch(new Request(`${origin}/sitemap.xml`), checkoutEnv);
 sitemap = await response.text();
 assert.match(sitemap, new RegExp(`/paper/${paidCard.slug}`), 'published secure card is indexed');
