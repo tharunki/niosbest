@@ -51,6 +51,9 @@ try {
   assert.equal(diagnostic.response.status, 200);
   assert.equal(diagnostic.data.remoteChecks, false, 'the initial admin page must not make external provider calls');
   assert.equal(diagnostic.data.checks.resend.senderDomain, 'example.test');
+  assert.deepEqual(diagnostic.data.checks.resend.senderDomains, { admission: 'example.test', emailVerification: 'example.test' });
+  assert.equal(diagnostic.data.checks.resend.verificationSenderSource, 'admission-email-from');
+  assert.equal(diagnostic.data.checks.resend.readinessKeySource, 'sending-key-fallback');
   assert.equal(diagnostic.data.checks.zoom.meetingHostConfigured, false);
   assert.equal(diagnostic.data.checks.supabase.configured, true);
   const serialised = JSON.stringify(diagnostic.data);

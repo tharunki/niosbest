@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { counselorReply } from './counselor.mjs';
 import { captureResourceOrder, resourceStore } from './resource-store.mjs';
-import { inspectResendSenderReadiness, senderDomainForEmail } from './resend-sender-readiness.mjs';
+import { inspectResendSenderReadiness, resolveResendSenderConfiguration } from './resend-sender-readiness.mjs';
 import { createStateStore, resolveStateStoreConfig } from './state-store.mjs';
 import { readFile, writeFile, mkdir, stat, unlink } from 'node:fs/promises';
 import { createHash, createHmac, randomBytes, randomInt, createCipheriv, createDecipheriv, timingSafeEqual, scryptSync } from 'node:crypto';
@@ -35,6 +35,32 @@ const demosEnabled = !isProduction && process.env.ALLOW_DEMO_ACCOUNTS !== 'false
 // a developer must opt in explicitly when testing an external provider.
 function outboundDeliveryEnabled() {
   return isProduction || process.env.ALLOW_DEVELOPMENT_OUTBOUND_DELIVERY === 'true';
+}
+// Keep every sender decision in one server-only configuration object. In
+// particular, production must never fall back to Resend's onboarding sender:
+// it is not the academy's verified identity and can cause a misleading 403.
+const resendSenderConfiguration = resolveResendSenderConfiguration({
+  apiKey: process.env.RESEND_API_KEY,
+  readinessApiKey: process.env.RESEND_READINESS_API_KEY,
+  admissionFrom: process.env.ADMISSION_EMAIL_FROM,
+  emailVerificationFrom: process.env.EMAIL_VERIFICATION_FROM
+});
+function resendDeliveryConfig(kind = 'admission') {
+  const verification = kind === 'verification';
+  const from = verification ? resendSenderConfiguration.verificationFrom : resendSenderConfiguration.admissionFrom;
+  const senderConfigured = verification ? resendSenderConfiguration.verificationConfigured : resendSenderConfiguration.admissionConfigured;
+  if (!resendSenderConfiguration.sendingConfigured || !senderConfigured || !from) return null;
+  return { apiKey: resendSenderConfiguration.sendingApiKey, from };
+}
+async function sendResendEmail({ kind = 'admission', to, subject, text }) {
+  const config = resendDeliveryConfig(kind);
+  if (!config) throw Object.assign(new Error('A verified academy email sender is not configured.'), { status: 503, code: 'resend-sender-not-configured' });
+  return fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ from: config.from, to: Array.isArray(to) ? to : [to], subject, text }),
+    signal: AbortSignal.timeout(12_000)
+  });
 }
 function s3EndpointConfigurationError(value) {
   const source = String(value || '').trim();
@@ -194,9 +220,7 @@ function studentEmailIsVerified(user) { return user?.role !== 'student' || Boole
 function emailVerificationTestMode() { return !isProduction && process.env.EMAIL_VERIFICATION_TEST_MODE === 'true'; }
 function emailVerificationDeliveryConfig() {
   if (!outboundDeliveryEnabled()) return null;
-  const apiKey = String(process.env.RESEND_API_KEY || '').trim();
-  const from = String(process.env.EMAIL_VERIFICATION_FROM || process.env.ADMISSION_EMAIL_FROM || '').trim();
-  return apiKey && from ? { apiKey, from } : null;
+  return resendDeliveryConfig('verification');
 }
 // Production account creation fails closed until a read-only Resend Domains
 // check has confirmed that the exact OTP sender domain is verified. This stops
@@ -245,8 +269,10 @@ async function refreshEmailVerificationReadiness({ force = false } = {}) {
   emailVerificationReadinessRequest = (async () => {
     const config = emailVerificationDeliveryConfig();
     const result = await inspectResendSenderReadiness({
-      apiKey: config?.apiKey,
-      from: config?.from,
+      // A dedicated, read-only-capable key can be used for the safe Domains
+      // request when the send-only key is intentionally scope-restricted.
+      apiKey: resendSenderConfiguration.readinessApiKey,
+      froms: [config?.from],
       endpoint: resendReadinessEndpoint()
     });
     emailVerificationReadiness.ready = result.ready === true;
@@ -343,16 +369,11 @@ async function sendEmailVerificationCode(email, code) {
   }
   let response;
   try {
-    response = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        from: config.from,
-        to: [email],
-        subject: 'Your NIOS Best Academy verification code',
-        text: `Your NIOS Best Academy email verification code is: ${code}\n\nIt expires in 10 minutes. Never share this code with anyone, including academy staff. If you did not create an account, you can ignore this email.`
-      }),
-      signal: AbortSignal.timeout(12_000)
+    response = await sendResendEmail({
+      kind: 'verification',
+      to: email,
+      subject: 'Your NIOS Best Academy verification code',
+      text: `Your NIOS Best Academy email verification code is: ${code}\n\nIt expires in 10 minutes. Never share this code with anyone, including academy staff. If you did not create an account, you can ignore this email.`
     });
   } catch {
     throw Object.assign(new Error('Email verification is temporarily unavailable. Please try again later.'), { status: 503 });
@@ -675,18 +696,18 @@ function publicAdmissionDocument(document) { const { storageKey, ...safe } = doc
 async function sendAdmissionIntakeNotice(state, enrollment) {
   const student = state.students.find(item => item.id === enrollment.studentId), application = { enrollmentId: enrollment.id, assignedBatchCode: enrollment.assignedBatchCode, status: enrollment.status, student: student ? { id: student.id, name: student.name, email: student.email, phone: student.phone } : null, selectedSubjects: enrollment.selectedSubjects || [], documentTypes: state.admissionDocuments.filter(item => item.enrollmentId === enrollment.id).map(item => item.type) };
   const publicUrl = String(process.env.APP_PUBLIC_URL || '').replace(/\/$/, ''), documentLinks = state.admissionDocuments.filter(item => item.enrollmentId === enrollment.id).map(item => `${item.label}: ${publicUrl ? `${publicUrl}/api/admin/admission-documents/${item.id}/download` : `Admin portal → application ${enrollment.id}`}`).join('\n'), text = `New paid-gated admission application\n\nStudent: ${student?.name || 'Student'}\nEmail: ${student?.email || '—'}\nPhone: ${student?.phone || '—'}\nBatch: ${application.assignedBatchCode}\nSubjects: ${(application.selectedSubjects || []).map(item => `${item.code} ${item.name}`).join(', ')}\n\nProtected documents:\n${documentLinks}\n\nOpen the authenticated admin portal to review/download files.`;
-  const attemptedAt = now(), deliveryEnabled = outboundDeliveryEnabled(), provider = deliveryEnabled && process.env.RESEND_API_KEY && process.env.ADMIN_ADMISSION_EMAIL ? 'resend' : deliveryEnabled && process.env.ADMISSION_INTAKE_WEBHOOK_URL ? 'webhook' : 'academy-review-queue';
+  const attemptedAt = now(), deliveryEnabled = outboundDeliveryEnabled(), provider = deliveryEnabled && resendDeliveryConfig('admission') && process.env.ADMIN_ADMISSION_EMAIL ? 'resend' : deliveryEnabled && process.env.ADMISSION_INTAKE_WEBHOOK_URL ? 'webhook' : 'academy-review-queue';
   try {
-    if (provider === 'resend') { const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM || 'Admissions <onboarding@resend.dev>', to: [process.env.ADMIN_ADMISSION_EMAIL], subject: `New NIOS application — ${student?.name || enrollment.id}`, text }), signal: AbortSignal.timeout(12_000) }); if (!response.ok) throw new Error(`Admin email delivery failed: ${response.status}`); return { status: 'sent', provider, attemptedAt, error: null }; }
+    if (provider === 'resend') { const response = await sendResendEmail({ to: process.env.ADMIN_ADMISSION_EMAIL, subject: `New NIOS application — ${student?.name || enrollment.id}`, text }); if (!response.ok) throw new Error(`Admin email delivery failed: ${response.status}`); return { status: 'sent', provider, attemptedAt, error: null }; }
     if (provider === 'webhook') { const response = await fetch(process.env.ADMISSION_INTAKE_WEBHOOK_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'admission.submitted', at: attemptedAt, application, text }), signal: AbortSignal.timeout(8_000) }); if (!response.ok) throw new Error(`Intake webhook delivery failed: ${response.status}`); return { status: 'sent', provider, attemptedAt, error: null }; }
     return { status: 'queued', provider, attemptedAt, error: null };
   } catch (error) { const message = String(error.message || 'Notification delivery failed.').slice(0, 300); console.warn('Admission intake notification failed:', message); return { status: 'failed', provider, attemptedAt, error: message }; }
 }
 async function sendEnquiryNotice(enquiry) {
-  if (!outboundDeliveryEnabled() || !process.env.RESEND_API_KEY || !process.env.ADMIN_ADMISSION_EMAIL) return 'queued';
+  if (!outboundDeliveryEnabled() || !resendDeliveryConfig('admission') || !process.env.ADMIN_ADMISSION_EMAIL) return 'queued';
   const text = `New website enquiry\n\nName: ${enquiry.name}\nEmail: ${enquiry.email}\nMobile: ${enquiry.phone}\nTopic: ${enquiry.topic}\n\nMessage:\n${enquiry.message}${enquiry.attachmentName ? `\n\nAttachment stored securely: ${enquiry.attachmentName}` : ''}`;
   try {
-    const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM || 'Admissions <onboarding@resend.dev>', to: [process.env.ADMIN_ADMISSION_EMAIL], subject: `Website enquiry — ${enquiry.topic}`, text }), signal: AbortSignal.timeout(12_000) });
+    const response = await sendResendEmail({ to: process.env.ADMIN_ADMISSION_EMAIL, subject: `Website enquiry — ${enquiry.topic}`, text });
     if (!response.ok) throw new Error(`Resend returned ${response.status}`);
     return 'sent';
   } catch (error) { console.warn('Enquiry email delivery failed:', error.message); return 'queued'; }
@@ -694,8 +715,8 @@ async function sendEnquiryNotice(enquiry) {
 async function sendStaffInvite(email, token, role = 'teacher') {
   const publicUrl = String(process.env.APP_PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
   const setupUrl = `${publicUrl}/accept-invite?token=${encodeURIComponent(token)}`;
-  if (!outboundDeliveryEnabled() || !process.env.RESEND_API_KEY) return { delivered: false, setupUrl: isProduction ? null : setupUrl };
-  const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM || 'NIOS Best Academy <onboarding@resend.dev>', to: [email], subject: `Set up your ${role === 'admin' ? 'administrator' : 'teacher'} account`, text: `You have been invited to NIOS Best Academy. Create your password using this single-use link (valid for 24 hours):\n\n${setupUrl}\n\nIf you did not expect this invitation, ignore this email.` }), signal: AbortSignal.timeout(12_000) });
+  if (!outboundDeliveryEnabled() || !resendDeliveryConfig('admission')) return { delivered: false, setupUrl: isProduction ? null : setupUrl };
+  const response = await sendResendEmail({ to: email, subject: `Set up your ${role === 'admin' ? 'administrator' : 'teacher'} account`, text: `You have been invited to NIOS Best Academy. Create your password using this single-use link (valid for 24 hours):\n\n${setupUrl}\n\nIf you did not expect this invitation, ignore this email.` });
   if (!response.ok) throw Object.assign(new Error(`Invitation email delivery failed with HTTP ${response.status}.`), { status: 502 });
   return { delivered: true, setupUrl: null };
 }
@@ -889,9 +910,9 @@ async function sendNotification(student, message, options = {}) {
     const response = await fetch(process.env.WATI_SEND_URL, { method: 'POST', headers: { authorization: `Bearer ${process.env.WATI_TOKEN}`, 'content-type': 'application/json' }, body: JSON.stringify({ whatsappNumber: student.phone.replace(/\D/g, ''), text: message }), signal: AbortSignal.timeout(12_000) });
     if (!response.ok) throw new Error(`WATI delivery failed: ${response.status}`);
   } else if (provider === 'resend-email') {
-    if (!process.env.RESEND_API_KEY || !process.env.ADMISSION_EMAIL_FROM) throw new Error('RESEND_API_KEY and ADMISSION_EMAIL_FROM are required for student email notifications.');
+    if (!resendDeliveryConfig('admission')) throw new Error('A verified academy email sender is required for student email notifications.');
     if (!/^\S+@\S+\.\S+$/.test(String(student.email || ''))) throw new Error('The student does not have a valid email address for notifications.');
-    const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM, to: [student.email], subject, text: `${message}\n\nSign in to your Student Desk for details.` }), signal: AbortSignal.timeout(12_000) });
+    const response = await sendResendEmail({ to: student.email, subject, text: `${message}\n\nSign in to your Student Desk for details.` });
     if (!response.ok) throw new Error(`Student email delivery failed: ${response.status}`);
   } else if (provider === 'webhook') {
     if (!process.env.WEBHOOK_URL) throw new Error('WEBHOOK_URL is required.');
@@ -1039,13 +1060,20 @@ function integrationReadiness(state) {
   const configured = names => names.filter(name => !String(process.env[name] || '').trim());
   const latestDelivery = [...(state.enrollments || [])].filter(item => item.intakeNotice?.attemptedAt).sort((a, b) => String(b.intakeNotice.attemptedAt).localeCompare(String(a.intakeNotice.attemptedAt)))[0]?.intakeNotice || null;
   const paymentRequirements = paymentProvider === 'razorpay' ? ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'] : [];
-  const emailRequirements = notificationProvider === 'resend-email' ? ['RESEND_API_KEY', 'ADMISSION_EMAIL_FROM'] : [];
+  const emailRequirements = notificationProvider === 'resend-email' ? resendDiagnosticMissing() : [];
   const niosMode = String(process.env.NIOS_SYNC_MODE || 'manual').trim().toLowerCase();
   const niosRequirements = niosMode === 'official' ? ['OFFICIAL_NIOS_CONNECTOR_URL', 'OFFICIAL_NIOS_CONNECTOR_TOKEN'] : [];
   return {
     persistence: { ready: stateStore.durable && durableFileStorage, store: stateStore.publicStatus(), storageDriver, missing: storageConfigurationMissing },
     payments: { provider: paymentProvider, ready: paymentProvider === 'razorpay' && configured(paymentRequirements).length === 0, missing: configured(paymentRequirements) },
-    email: { provider: notificationProvider, ready: notificationProvider === 'resend-email' && configured(emailRequirements).length === 0, missing: configured(emailRequirements), latestIntakeDelivery: latestDelivery ? { status: latestDelivery.status, provider: latestDelivery.provider, attemptedAt: latestDelivery.attemptedAt, error: latestDelivery.error || null } : null },
+    email: {
+      provider: notificationProvider,
+      ready: notificationProvider === 'resend-email' && emailRequirements.length === 0,
+      missing: emailRequirements,
+      senderDomains: { admission: resendSenderConfiguration.admissionDomain || null, emailVerification: resendSenderConfiguration.verificationDomain || null },
+      verificationSenderSource: resendSenderConfiguration.verificationSource,
+      latestIntakeDelivery: latestDelivery ? { status: latestDelivery.status, provider: latestDelivery.provider, attemptedAt: latestDelivery.attemptedAt, error: latestDelivery.error || null } : null
+    },
     zoom: { ready: configured(['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_HOST_USER_ID']).length === 0, missing: configured(['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET', 'ZOOM_HOST_USER_ID']) },
     nios: { mode: niosMode, ready: niosMode === 'manual' || configured(niosRequirements).length === 0, missing: configured(niosRequirements) }
   };
@@ -1053,8 +1081,18 @@ function integrationReadiness(state) {
 function configuredEnvironmentNames(names) {
   return names.filter(name => !String(process.env[name] || '').trim());
 }
-function configuredEmailDomain(value) {
-  return senderDomainForEmail(value);
+function resendDiagnosticMissing({ includeAdminInbox = false, includeVerificationSender = false } = {}) {
+  const missing = [];
+  if (!resendSenderConfiguration.sendingConfigured) missing.push('RESEND_API_KEY');
+  if (!resendSenderConfiguration.admissionConfigured) missing.push('valid ADMISSION_EMAIL_FROM');
+  if (includeVerificationSender && !resendSenderConfiguration.verificationConfigured) {
+    missing.push(resendSenderConfiguration.verificationSource === 'email-verification-from'
+      ? 'valid EMAIL_VERIFICATION_FROM'
+      : 'valid EMAIL_VERIFICATION_FROM or ADMISSION_EMAIL_FROM');
+  }
+  if (!resendSenderConfiguration.readinessConfigured) missing.push('RESEND_READINESS_API_KEY or RESEND_API_KEY');
+  if (includeAdminInbox && !/^\S+@\S+\.\S+$/.test(String(process.env.ADMIN_ADMISSION_EMAIL || '').trim())) missing.push('valid ADMIN_ADMISSION_EMAIL');
+  return [...new Set(missing)];
 }
 function diagnosticFailure(response, fallback = 'provider-unavailable') {
   const status = Number(response?.status);
@@ -1096,8 +1134,7 @@ function supabaseDiagnosticHeaders(key, schema) {
   return { apikey: key, ...(legacyJwt ? { authorization: `Bearer ${key}` } : {}), accept: 'application/json', 'accept-profile': schema };
 }
 async function integrationDiagnostics(state, { probe = false } = {}) {
-  const resendMissing = configuredEnvironmentNames(['RESEND_API_KEY', 'ADMISSION_EMAIL_FROM', 'ADMIN_ADMISSION_EMAIL']);
-  const senderDomain = configuredEmailDomain(process.env.ADMISSION_EMAIL_FROM);
+  const resendMissing = resendDiagnosticMissing({ includeAdminInbox: true, includeVerificationSender: true });
   const zoomMissing = configuredEnvironmentNames(['ZOOM_ACCOUNT_ID', 'ZOOM_CLIENT_ID', 'ZOOM_CLIENT_SECRET']);
   const zoomHostConfigured = isSafeString(String(process.env.ZOOM_HOST_USER_ID || '').trim(), 254);
   const supabase = supabaseDiagnosticConfiguration();
@@ -1110,11 +1147,17 @@ async function integrationDiagnostics(state, { probe = false } = {}) {
     },
     resend: {
       checked: false,
-      configured: resendMissing.length === 0 && Boolean(senderDomain),
-      missing: senderDomain ? resendMissing : [...new Set([...resendMissing, 'valid ADMISSION_EMAIL_FROM'])],
-      senderDomain: senderDomain || null,
+      configured: resendMissing.length === 0,
+      missing: resendMissing,
+      senderDomain: resendSenderConfiguration.admissionDomain || null,
+      senderDomains: {
+        admission: resendSenderConfiguration.admissionDomain || null,
+        emailVerification: resendSenderConfiguration.verificationDomain || null
+      },
+      verificationSenderSource: resendSenderConfiguration.verificationSource,
+      readinessKeySource: resendSenderConfiguration.readinessKeySource,
       latestIntakeDelivery: compactDeliveryStatus(state),
-      nextAction: resendMissing.length === 0 && senderDomain ? 'Use Verify connections to confirm the sender domain without sending an email.' : 'Set a Resend API key, verified sender address, and academy review inbox.'
+      nextAction: resendMissing.length === 0 ? 'Use Verify connections to confirm both academy sender domains without sending an email.' : 'Set a Resend sending key, valid academy sender addresses, and an academy review inbox.'
     },
     zoom: {
       checked: false,
@@ -1137,19 +1180,25 @@ async function integrationDiagnostics(state, { probe = false } = {}) {
   if (!checks.resend.configured) {
     checks.resend.code = 'not-configured';
   } else {
-    try {
-      const response = await fetch('https://api.resend.com/domains', { headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}` }, signal: AbortSignal.timeout(12_000) });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) Object.assign(checks.resend, diagnosticFailure(response));
-      else {
-        const domains = Array.isArray(payload.data) ? payload.data : [];
-        const domain = domains.find(item => String(item.name || '').toLowerCase() === senderDomain);
-        checks.resend.reachable = true;
-        checks.resend.httpStatus = response.status;
-        checks.resend.senderDomainVerified = String(domain?.status || '').toLowerCase() === 'verified';
-        checks.resend.nextAction = checks.resend.senderDomainVerified ? 'Sender domain is verified. A future real application will send normally; no email was sent by this check.' : 'Verify the displayed sender domain in Resend before relying on intake emails.';
-      }
-    } catch { Object.assign(checks.resend, { reachable: false, httpStatus: null, code: 'provider-unavailable' }); }
+    const readiness = await inspectResendSenderReadiness({
+      apiKey: resendSenderConfiguration.readinessApiKey,
+      froms: [resendSenderConfiguration.admissionFrom, resendSenderConfiguration.verificationFrom]
+    });
+    checks.resend.reachable = readiness.reachable;
+    checks.resend.httpStatus = readiness.httpStatus;
+    checks.resend.code = readiness.code;
+    checks.resend.domainVerification = Object.fromEntries(readiness.domains.map(domain => [domain.name, domain.verified]));
+    // Keep the original boolean for the existing operations dashboard while
+    // also reporting the stricter all-sender result under a clear name.
+    checks.resend.senderDomainVerified = readiness.ready;
+    checks.resend.senderDomainsVerified = readiness.ready;
+    checks.resend.nextAction = readiness.ready
+      ? 'All configured academy sender domains are verified. This check did not send an email.'
+      : readiness.code === 'authorization-or-request-rejected'
+        ? 'Use a server-only RESEND_READINESS_API_KEY with domain-read access, or allow the sending key to list domains.'
+        : readiness.code === 'sender-domain-unverified'
+          ? 'Verify each displayed academy sender domain in Resend before relying on email delivery.'
+          : 'Resend could not be reached safely. Check the server-only readiness key and try again.';
   }
 
   checks.zoom.checked = true;

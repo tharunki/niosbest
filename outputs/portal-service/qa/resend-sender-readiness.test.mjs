@@ -1,8 +1,36 @@
 import assert from 'node:assert/strict';
-import { inspectResendSenderReadiness, senderDomainForEmail } from '../resend-sender-readiness.mjs';
+import { readFile } from 'node:fs/promises';
+import { inspectResendSenderReadiness, resolveResendSenderConfiguration, senderDomainForEmail } from '../resend-sender-readiness.mjs';
 
 assert.equal(senderDomainForEmail('NIOS Best Academy <accounts@NiosBest.in>'), 'niosbest.in');
 assert.equal(senderDomainForEmail('not an address'), null);
+assert.equal(senderDomainForEmail('accounts@localhost'), null, 'a sender must contain a real domain name');
+
+const sharedSender = resolveResendSenderConfiguration({
+  apiKey: 'send-key', admissionFrom: 'NIOS Best Academy <accounts@mail.niosbest.in>'
+});
+assert.equal(sharedSender.verificationFrom, sharedSender.admissionFrom, 'OTP may deliberately reuse the verified admission sender');
+assert.equal(sharedSender.verificationSource, 'admission-email-from');
+assert.equal(sharedSender.readinessApiKey, 'send-key', 'the send key remains the backwards-compatible readiness fallback');
+assert.equal(sharedSender.readinessKeySource, 'sending-key-fallback');
+
+const dedicatedReadiness = resolveResendSenderConfiguration({
+  apiKey: 'send-key', readinessApiKey: 'read-key',
+  admissionFrom: 'Admissions <admissions@mail.niosbest.in>',
+  emailVerificationFrom: 'Accounts <accounts@verify.niosbest.in>'
+});
+assert.equal(dedicatedReadiness.readinessApiKey, 'read-key');
+assert.equal(dedicatedReadiness.readinessKeySource, 'dedicated-readiness-key');
+assert.deepEqual(dedicatedReadiness.senderDomains, ['mail.niosbest.in', 'verify.niosbest.in']);
+
+const malformedOtpSender = resolveResendSenderConfiguration({
+  apiKey: 'send-key', admissionFrom: 'Admissions <admissions@mail.niosbest.in>', emailVerificationFrom: 'not-an-email'
+});
+assert.equal(malformedOtpSender.verificationConfigured, false, 'an explicitly invalid OTP sender must not silently use another identity');
+assert.deepEqual(malformedOtpSender.invalid, ['valid EMAIL_VERIFICATION_FROM']);
+
+const serverSource = await readFile(new URL('../server.mjs', import.meta.url), 'utf8');
+assert.equal(serverSource.includes('onboarding@resend.dev'), false, 'production sender paths must never fall back to Resend onboarding mail');
 
 const calls = [];
 const verified = await inspectResendSenderReadiness({
@@ -20,6 +48,20 @@ assert.equal(calls.length, 1);
 assert.equal(new URL(calls[0].url).pathname, '/domains');
 assert.equal(calls[0].options.method, 'GET', 'the readiness check must never create or send an email');
 assert.equal(calls[0].options.body, undefined, 'the readiness check must not contain a message payload');
+
+const twoDomains = await inspectResendSenderReadiness({
+  apiKey: 'read-key',
+  froms: ['Admissions <admissions@mail.niosbest.in>', 'Accounts <accounts@verify.niosbest.in>'],
+  fetchImpl: async () => new Response(JSON.stringify({ data: [
+    { name: 'mail.niosbest.in', status: 'verified' },
+    { name: 'verify.niosbest.in', status: 'pending' }
+  ] }), { status: 200 })
+});
+assert.equal(twoDomains.ready, false, 'every configured sender domain must be verified');
+assert.deepEqual(twoDomains.domains, [
+  { name: 'mail.niosbest.in', verified: true },
+  { name: 'verify.niosbest.in', verified: false }
+]);
 
 const unverified = await inspectResendSenderReadiness({
   apiKey: 'test-key', from: 'accounts@niosbest.in',
