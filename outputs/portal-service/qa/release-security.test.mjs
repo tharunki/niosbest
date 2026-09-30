@@ -33,6 +33,7 @@ assert.throws(() => captureResponse(resourceState, { ...capture, id: 'pay_other'
 
 const serverSource = await readFile(join(serviceDirectory, 'server.mjs'), 'utf8');
 const recoveryPageSource = await readFile(join(serviceDirectory, '..', 'recover-admin.html'), 'utf8');
+const adminHealthPageSource = await readFile(join(serviceDirectory, '..', 'admin-health.html'), 'utf8');
 assert.match(serverSource, /ZOOM_HOST_USER_ID/);
 assert.match(serverSource, /\/v2\/users\/\$\{encodeURIComponent\(hostUserId\)\}\/meetings/);
 assert.match(serverSource, /function outboundDeliveryEnabled\(\) \{\s*return isProduction \|\| process\.env\.ALLOW_DEVELOPMENT_OUTBOUND_DELIVERY === 'true';\s*\}/, 'development outbound delivery must require an explicit opt-in');
@@ -56,6 +57,7 @@ assert.match(serverSource, /isSamePublicOrigin\(request\)/, 'recovery requests m
 assert.match(recoveryPageSource, /<meta name="referrer" content="no-referrer">/, 'recovery pages must not leak recovery context through referrers');
 assert.match(recoveryPageSource, /const handoff=new URLSearchParams\(location\.hash\.replace\(\/\^#\/,''\)\)/, 'a recovery handoff must use a non-network URL fragment');
 assert.match(recoveryPageSource, /history\.replaceState\(null,'',location\.pathname\+location\.search\)/, 'the recovery fragment must be removed before the owner uses the form');
+assert.match(adminHealthPageSource, /const diagnosticStamp=document\.getElementById\('diagnostic-stamp'\);/, 'the operations diagnostics timestamp must use an explicit DOM reference');
 
 const environment = {
   ...process.env,

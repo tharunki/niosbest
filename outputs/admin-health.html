@@ -28,6 +28,9 @@
   <script>
     const session=JSON.parse(sessionStorage.getItem('niosSession')||'null');
     if(session?.role!=='admin') location.replace('/login');
+    // Hyphenated element IDs do not become JavaScript global variables. Keep
+    // this reference explicit so diagnostics can render on every browser.
+    const diagnosticStamp=document.getElementById('diagnostic-stamp');
     const esc=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
     const status=(label,ready,detail)=>`<article class="status ${ready?'ok':'blocked'}"><b>${ready?'● Ready':'● Needs setup'} · ${esc(label)}</b><span>${esc(detail)}</span></article>`;
     const configurationDetail=item=>{const missing=(item?.missing||[]);return missing.length?'Missing: '+missing.join(', '):'Configured';};
