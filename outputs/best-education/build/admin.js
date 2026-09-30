@@ -533,15 +533,22 @@ function refreshSubjects() {
 
 async function loadFiles(selected = value('fileKey')) {
   const select = $('#fileKey');
+  const selectedFileKey = String(selected || '').trim();
   try {
     const data = await request('/api/admin/files');
     const files = toArray(data.files);
+    // Storage listings can briefly lag a successful bulk upload. Keep the
+    // card's existing key in the editor so saving another field cannot unlink
+    // its protected PDF while the list catches up.
+    const savedFileOption = selectedFileKey && !files.includes(selectedFileKey)
+      ? `<option value="${escapeHTML(selectedFileKey)}">${escapeHTML(displayPdfFilename(selectedFileKey))} — saved PDF</option>`
+      : '';
     select.disabled = false;
     uploadInput.disabled = false;
     uploadButton.disabled = false;
     uploadName.textContent = 'Maximum file size: 25 MB.';
-    select.innerHTML = `<option value="">Not ready for sale yet</option>${files.map(file => `<option value="${escapeHTML(file)}">${escapeHTML(displayPdfFilename(file))}</option>`).join('')}`;
-    if ([...select.options].some(option => option.value === selected)) select.value = selected;
+    select.innerHTML = `<option value="">Not ready for sale yet</option>${files.map(file => `<option value="${escapeHTML(file)}">${escapeHTML(displayPdfFilename(file))}</option>`).join('')}${savedFileOption}`;
+    if ([...select.options].some(option => option.value === selectedFileKey)) select.value = selectedFileKey;
     renderFiles(files);
   } catch (error) {
     if (error.status === 503 && error.code === 'PAPER_STORAGE_UNAVAILABLE') {
@@ -549,8 +556,8 @@ async function loadFiles(selected = value('fileKey')) {
       select.disabled = true;
       uploadInput.disabled = true;
       uploadButton.disabled = true;
-      select.innerHTML = `<option value="${escapeHTML(selected || '')}">${escapeHTML(selected ? `${selected} — storage unavailable` : 'Protected storage unavailable')}</option>`;
-      if (selected) select.value = selected;
+      select.innerHTML = `<option value="${escapeHTML(selectedFileKey)}">${escapeHTML(selectedFileKey ? `${selectedFileKey} — storage unavailable` : 'Protected storage unavailable')}</option>`;
+      if (selectedFileKey) select.value = selectedFileKey;
       uploadName.textContent = 'Connect protected PDF storage before uploading or selling PDFs.';
       renderFiles([], message);
       return;
@@ -558,7 +565,10 @@ async function loadFiles(selected = value('fileKey')) {
     select.disabled = false;
     uploadInput.disabled = false;
     uploadButton.disabled = false;
-    select.innerHTML = '<option value="">No protected PDFs found</option>';
+    select.innerHTML = selectedFileKey
+      ? `<option value="${escapeHTML(selectedFileKey)}">${escapeHTML(displayPdfFilename(selectedFileKey))} — saved PDF (library refresh needed)</option>`
+      : '<option value="">No protected PDFs found</option>';
+    if (selectedFileKey) select.value = selectedFileKey;
     renderFiles([], 'Protected PDF files could not be loaded. Try again shortly.');
   }
 }
@@ -621,7 +631,11 @@ async function editCard(id) {
   $('#card-seo-keywords').value = entityValue(card, 'seoKeywords');
   setTags('card', entityValue(card, 'tags'));
   syncFixedPrice();
-  await loadFiles(card.fileKey || '');
+  const savedFileKey = String(card.fileKey || '').trim();
+  await loadFiles(savedFileKey);
+  // `loadFiles` includes a temporary saved-PDF option when storage listing
+  // propagation is delayed, so the next card save retains this association.
+  if (savedFileKey) $('#fileKey').value = savedFileKey;
   $('#form-heading').textContent = 'Edit study card';
   $('#cancel-edit').hidden = false;
   $('#content-view').hidden = false;
@@ -1347,7 +1361,7 @@ async function submitBulkUpload(event) {
     $('#bulk-status').textContent = errors.length ? 'The batch was processed with issues. Review the details below.' : 'Batch created successfully. Each card used the isPublished value in its CSV row.';
     showToast(errors.length ? 'Batch processed with issues to review.' : 'Batch created successfully.', errors.length ? 'error' : 'success');
     if (!errors.length) {
-      await Promise.allSettled([loadCards(), loadSections()]);
+      await Promise.allSettled([loadCards(), loadSections(), loadFiles()]);
       state.loadedViews.delete('overview');
     }
   } catch (error) {
