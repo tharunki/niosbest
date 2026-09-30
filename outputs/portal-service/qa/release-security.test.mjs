@@ -32,6 +32,7 @@ assert.equal(captureResponse(resourceState, capture).duplicate, true);
 assert.throws(() => captureResponse(resourceState, { ...capture, id: 'pay_other' }), /different payment/i);
 
 const serverSource = await readFile(join(serviceDirectory, 'server.mjs'), 'utf8');
+const recoveryPageSource = await readFile(join(serviceDirectory, '..', 'recover-admin.html'), 'utf8');
 assert.match(serverSource, /ZOOM_HOST_USER_ID/);
 assert.match(serverSource, /\/v2\/users\/\$\{encodeURIComponent\(hostUserId\)\}\/meetings/);
 assert.match(serverSource, /function outboundDeliveryEnabled\(\) \{\s*return isProduction \|\| process\.env\.ALLOW_DEVELOPMENT_OUTBOUND_DELIVERY === 'true';\s*\}/, 'development outbound delivery must require an explicit opt-in');
@@ -48,6 +49,9 @@ assert.match(serverSource, /ADMIN_ACCOUNT_RECOVERY_EMAIL/, 'owner recovery must 
 assert.match(serverSource, /adminRecoveryExpiresAt > Date\.now\(\) && adminRecoveryExpiresAt <= Date\.now\(\) \+ maxRecoveryLifetimeMs/, 'owner recovery must be short-lived');
 assert.match(serverSource, /stateOnlyOwnerRecovery = path === '\/api\/auth\/admin-recovery' && stateStore\.durable/, 'owner recovery must require durable state even if document storage is unavailable');
 assert.match(serverSource, /user\.sessionVersion = sessionVersion\(user\) \+ 1;/, 'password changes must invalidate existing sessions');
+assert.match(recoveryPageSource, /<meta name="referrer" content="no-referrer">/, 'recovery pages must not leak recovery context through referrers');
+assert.match(recoveryPageSource, /const handoff=new URLSearchParams\(location\.hash\.replace\(\/\^#\/,''\)\)/, 'a recovery handoff must use a non-network URL fragment');
+assert.match(recoveryPageSource, /history\.replaceState\(null,'',location\.pathname\+location\.search\)/, 'the recovery fragment must be removed before the owner uses the form');
 
 const environment = {
   ...process.env,

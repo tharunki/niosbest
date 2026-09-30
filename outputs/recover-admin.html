@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="robots" content="noindex,nofollow,noarchive">
+  <meta name="referrer" content="no-referrer">
   <title>Recover owner access — NIOS Best Academy</title>
   <style>
     :root{color-scheme:dark;--ink:#f5f3ff;--muted:#aaa9cb;--line:#3b376c;--panel:#171642;--violet:#8977ff;--bg:#0b0b29}
@@ -34,6 +35,12 @@
   </main>
   <script>
     const byId=id=>document.getElementById(id),form=byId('recoveryForm'),status=byId('status'),submit=byId('submit');
+    // A short-lived recovery link may carry its high-entropy key in the URL
+    // fragment. Fragments are not sent to the server; remove it immediately
+    // after transferring the value to this masked field so it cannot linger
+    // in the visible address or browser history.
+    const handoff=new URLSearchParams(location.hash.replace(/^#/,'')),handoffKey=handoff.get('recovery'),handoffOwner=handoff.get('owner');
+    if(/^(?:[A-Za-z0-9_-]{43}|[a-f0-9]{64})$/i.test(handoffKey||'')){byId('token').value=handoffKey;if(/^\S+@\S+\.\S+$/.test(handoffOwner||''))byId('email').value=handoffOwner;history.replaceState(null,'',location.pathname+location.search)}
     document.querySelectorAll('[data-toggle]').forEach(button=>button.addEventListener('click',()=>{const input=byId(button.dataset.toggle),visible=input.type==='text';input.type=visible?'password':'text';button.textContent=visible?'Show':'Hide';button.setAttribute('aria-label',visible?`Show ${input.labels?.[0]?.textContent?.toLowerCase()||'value'}`:`Hide ${input.labels?.[0]?.textContent?.toLowerCase()||'value'}`)}));
     form.addEventListener('submit',async event=>{event.preventDefault();const email=byId('email').value.trim(),token=byId('token').value,password=byId('password').value,passwordConfirmation=byId('confirmation').value;if(password!==passwordConfirmation){status.className='status';status.textContent='The new passwords do not match.';return}submit.disabled=true;status.className='status';status.textContent='Resetting securely…';try{const response=await fetch('/api/auth/admin-recovery',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,token,password,passwordConfirmation})}),data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'The recovery details are invalid or have expired.');form.reset();status.className='status ok';status.textContent='Password reset. Redirecting to sign in…';setTimeout(()=>location.assign('/login'),900)}catch(error){status.className='status';status.textContent=error.message}finally{submit.disabled=false}});
     window.addEventListener('pagehide',()=>{byId('token').value='';byId('password').value='';byId('confirmation').value=''});
