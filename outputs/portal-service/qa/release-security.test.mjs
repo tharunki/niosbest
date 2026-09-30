@@ -97,10 +97,11 @@ try {
   await waitForService();
 
   // Support clear, shareable public addresses without allowing them to land
-  // on a generic 404 page.
+  // on a generic 404 page. These are permanent canonical redirects so their
+  // historical links cannot compete with the current public URLs.
   for (const [path, target] of [['/courses', '/#courses'], ['/admission-tracker', '/#admission'], ['/refund', '/refund-policy']]) {
     const response = await fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual' });
-    assert.equal(response.status, 302, `${path} should preserve its useful public destination`);
+    assert.equal(response.status, 301, `${path} should preserve its useful public destination through a permanent redirect`);
     assert.equal(response.headers.get('location'), target);
   }
 
