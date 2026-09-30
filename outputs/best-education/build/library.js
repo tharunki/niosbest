@@ -26,7 +26,7 @@ const labels = { sample: 'Sample Paper', pyq: 'Previous Year Questions', mcq: 'M
 const slugs = { sample: 'sample-papers.html', pyq: 'pyqs.html', mcq: 'mcqs.html', important: 'important-questions.html' };
 const seoTitle = `${labels[type]} for Classes 10, 11 & 12 | TK's SOLUTION`;
 const seoDescription = `Buy chapter-wise ${labels[type].toLowerCase()} PDFs for Classes 10, 11 and 12. Lesson PDFs are ₹39 and complete bundles are ₹399.`;
-const seoOrigin = location.hostname.endsWith('.workers.dev') ? location.origin : 'https://www.ravitestpapers.in';
+const seoOrigin = location.hostname.endsWith('.workers.dev') ? location.origin : 'https://tksolutions.in';
 document.title = seoTitle;
 
 function setMeta(attribute, name, content) {

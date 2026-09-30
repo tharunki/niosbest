@@ -25,6 +25,8 @@ const ANALYTICS_WINDOW_MS = 60 * 60 * 1000;
 const MAX_ANALYTICS_EVENTS = 30;
 const FEEDBACK_WINDOW_MS = 15 * 60 * 1000;
 const MAX_FEEDBACK_SUBMISSIONS = 5;
+const CANONICAL_SITE_HOST = 'tksolutions.in';
+const CANONICAL_SITE_WWW_HOST = `www.${CANONICAL_SITE_HOST}`;
 const ALLOWED_TYPES = new Set(['sample', 'pyq', 'mcq', 'important']);
 const ALLOWED_CLASSES = new Set(['10', '11', '12']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -2811,6 +2813,13 @@ export default {
   async fetch(request, env) {
     try {
       const url = new URL(request.url);
+      // Keep one public address for SEO, sharing, and student bookmarks. The
+      // Worker still serves its workers.dev preview unchanged.
+      if (url.hostname.toLowerCase() === CANONICAL_SITE_WWW_HOST) {
+        url.protocol = 'https:';
+        url.host = CANONICAL_SITE_HOST;
+        return Response.redirect(url.toString(), 301);
+      }
       if (url.pathname.startsWith('/api/') || url.pathname === '/healthz') return await api(request, env, url);
       if (!['GET', 'HEAD'].includes(request.method)) return methodNotAllowed('GET, HEAD');
       if (url.pathname === '/sitemap.xml') return await renderSitemap(request, env);

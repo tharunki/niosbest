@@ -26,14 +26,14 @@ setMeta('property', 'og:type', 'website');
 setMeta('property', 'og:site_name', "TK's SOLUTION");
 setMeta('property', 'og:title', seoTitle);
 setMeta('property', 'og:description', seoDescription);
-setMeta('property', 'og:url', `https://www.ravitestpapers.in/${slugs[type]}`);
-setMeta('property', 'og:image', 'https://www.ravitestpapers.in/tk-solution-social-card.png');
+setMeta('property', 'og:url', `https://tksolutions.in/${slugs[type]}`);
+setMeta('property', 'og:image', 'https://tksolutions.in/tk-solution-social-card.png');
 setMeta('property', 'og:image:alt', "TK's SOLUTION study materials");
 setMeta('name', 'twitter:card', 'summary_large_image');
-setMeta('name', 'twitter:image', 'https://www.ravitestpapers.in/tk-solution-social-card.png');
+setMeta('name', 'twitter:image', 'https://tksolutions.in/tk-solution-social-card.png');
 setMeta('name', 'twitter:title', seoTitle);
 setMeta('name', 'twitter:description', seoDescription);
-const canonical = document.createElement('link'); canonical.rel = 'canonical'; canonical.href = `https://www.ravitestpapers.in/${slugs[type]}`; document.head.append(canonical);
+const canonical = document.createElement('link'); canonical.rel = 'canonical'; canonical.href = `https://tksolutions.in/${slugs[type]}`; document.head.append(canonical);
 document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="tk-solution-logo.png" alt="TK\'s SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">TK\'s <b>SOLUTION</b>'; });
 
 const grid = document.querySelector('#library-grid');

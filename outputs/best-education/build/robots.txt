@@ -2,4 +2,4 @@ User-agent: *
 Allow: /
 Disallow: /admin.html
 Disallow: /api/
-Sitemap: https://www.ravitestpapers.in/sitemap.xml
+Sitemap: https://tksolutions.in/sitemap.xml
