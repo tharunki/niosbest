@@ -1,78 +1,167 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
-  <title>Content Manager | Best Education</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Admin dashboard | Best Education</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="admin.css">
   <link rel="stylesheet" href="admin-catalog.css">
 </head>
 <body>
-  <header class="top"><div class="brand"><img src="logo.png" alt="Best Education logo" width="42" height="42" decoding="async">Best Education</div><a href="index.html">View website →</a></header>
+  <header class="top">
+    <a class="brand" href="#overview" aria-label="Best Education admin home"><img src="logo.png" alt="Best Education logo" width="42" height="42" decoding="async"> <span>Best Education</span></a>
+    <div class="top-actions">
+      <span id="admin-session-label" class="session-label" hidden>Administrator</span>
+      <a href="index.html">View website <span aria-hidden="true">→</span></a>
+      <button id="logout-top" class="top-signout" type="button" data-logout hidden>Sign out</button>
+    </div>
+  </header>
+
   <main class="wrap">
-    <section class="panel login-panel" id="login-view"><p class="eyebrow">Protected administration</p><h1>Admin sign in</h1><p class="notice">Use the private admin password configured on the server.</p><form id="login-form"><label class="field" for="password">Admin password<input id="password" name="password" type="password" autocomplete="current-password" required></label><button class="save" type="submit">Sign in</button></form><p class="notice" id="login-status" role="status" aria-live="polite"></p></section>
+    <section class="panel login-panel" id="login-view" aria-labelledby="login-heading">
+      <p class="eyebrow">Protected administration</p>
+      <h1 id="login-heading">Admin sign in</h1>
+      <p class="notice">Use the private admin password configured on the server.</p>
+      <form id="login-form">
+        <label class="field" for="password">Admin password
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <button class="save" type="submit">Sign in</button>
+      </form>
+      <p class="notice" id="login-status" role="status" aria-live="polite"></p>
+    </section>
+
     <div id="dashboard" hidden>
-      <div class="head"><div><p class="eyebrow">Content manager</p><h1>Manage study material.</h1></div><p>Organise every resource in a clear section, tile and study-card hierarchy. Published content is shared with every visitor.</p></div>
-      <section class="panel catalog-manager" aria-labelledby="catalog-heading">
-        <div class="catalog-heading-row">
-          <div>
-            <p class="eyebrow">Your study library</p>
-            <h2 id="catalog-heading">Library sections &amp; tiles</h2>
-          </div>
-          <p class="catalog-intro">Create top-level sections such as Class 10, Class 11, Class 12, JEE or NEET. Add child tiles inside them for Formula Sheets, Cheat Sheets, revision packs and any other collection, then place study cards under the right tile.</p>
+      <div class="head admin-head">
+        <div>
+          <p class="eyebrow">Best Education administration</p>
+          <h1>Run your learning library.</h1>
         </div>
-        <div class="catalog-layout">
-          <form id="section-form" class="catalog-form" autocomplete="off">
-            <input id="section-id" name="sectionId" type="hidden">
-            <fieldset>
-              <legend id="section-form-heading">Create a section or tile</legend>
-              <p class="helper field-intro">Leave Parent set to “Top-level library section” for a main area. Select a section to create a tile inside it.</p>
-              <label class="field" for="section-parent">Parent section<select id="section-parent" name="parentId" aria-describedby="section-parent-helper"><option value="">Top-level library section</option></select><small class="helper" id="section-parent-helper">A tile appears inside its selected section; tiles cannot contain further tiles.</small></label>
-              <label class="field" for="section-title">Title<input id="section-title" name="title" required maxlength="80" placeholder="e.g. Formula Sheets"></label>
-              <label class="field" for="section-description">Short description<textarea id="section-description" name="description" maxlength="280" placeholder="A clear one-line description for students"></textarea></label>
-              <label class="field" for="section-icon">Icon<select id="section-icon" name="icon" aria-describedby="section-icon-helper"><option value="📚">📚 Books</option><option value="🎓">🎓 Education</option><option value="🧪">🧪 Science</option><option value="🧮">🧮 Mathematics</option><option value="📐">📐 Formulae</option><option value="📝">📝 Practice</option><option value="⚡">⚡ Revision</option><option value="🧠">🧠 Concepts</option><option value="🎯">🎯 Exam prep</option></select><small class="helper" id="section-icon-helper">Choose from the safe built-in icons so the library stays consistent.</small></label>
-              <label class="field" for="section-order">Display order<input id="section-order" name="sortOrder" type="number" min="0" max="9999" step="1" value="0" inputmode="numeric"><small class="helper">Lower numbers appear first.</small></label>
-              <div class="toggle-grid" aria-label="Section visibility">
-                <label class="toggle-field" for="section-published"><input id="section-published" name="isPublished" type="checkbox" checked><span><strong>Published</strong><small>Visible to students when its parent is published.</small></span></label>
-                <label class="toggle-field" for="section-home"><input id="section-home" name="showOnHome" type="checkbox"><span><strong>Show on home</strong><small id="section-home-helper">Feature this top-level section on the homepage.</small></span></label>
-              </div>
-            </fieldset>
-            <div class="actions catalog-actions"><button class="save" id="section-submit" type="submit">Create section</button><button class="secondary" id="section-cancel" type="button" hidden>Cancel edit</button></div>
-          </form>
-          <section class="catalog-tree" aria-labelledby="section-list-heading">
-            <div class="catalog-tree-heading"><div><h3 id="section-list-heading">Current library structure</h3><p class="notice">Edit a section or tile whenever you need to update its wording, order or student visibility.</p></div></div>
-            <div id="section-list" class="section-list" role="region" aria-live="polite" aria-labelledby="section-list-heading"></div>
+        <p>See the health of your catalogue, manage student access and keep each resource easy to discover.</p>
+      </div>
+
+      <nav class="admin-nav" aria-label="Admin areas" role="tablist" aria-orientation="horizontal">
+        <button id="tab-overview" class="admin-nav-item is-active" type="button" role="tab" aria-selected="true" aria-controls="overview-view" data-view="overview"><span aria-hidden="true">▦</span> Overview</button>
+        <button id="tab-content" class="admin-nav-item" type="button" role="tab" aria-selected="false" aria-controls="content-view" data-view="content"><span aria-hidden="true">▤</span> Content library</button>
+        <button id="tab-orders" class="admin-nav-item" type="button" role="tab" aria-selected="false" aria-controls="orders-view" data-view="orders"><span aria-hidden="true">₹</span> Orders &amp; access</button>
+        <button id="tab-students" class="admin-nav-item" type="button" role="tab" aria-selected="false" aria-controls="students-view" data-view="students"><span aria-hidden="true">◉</span> Students</button>
+        <button id="tab-bulk" class="admin-nav-item" type="button" role="tab" aria-selected="false" aria-controls="bulk-view" data-view="bulk"><span aria-hidden="true">⇧</span> Bulk upload</button>
+        <button id="tab-promotions" class="admin-nav-item" type="button" role="tab" aria-selected="false" aria-controls="promotions-view" data-view="promotions"><span aria-hidden="true">%</span> Promotions</button>
+        <button id="tab-feedback" class="admin-nav-item" type="button" role="tab" aria-selected="false" aria-controls="feedback-view" data-view="feedback"><span aria-hidden="true">!</span> Feedback <span id="feedback-badge" class="nav-badge" hidden>0</span></button>
+      </nav>
+
+      <section id="overview-view" class="admin-view" role="tabpanel" aria-labelledby="tab-overview" tabindex="-1">
+        <div class="view-heading">
+          <div><p class="eyebrow">Business snapshot</p><h2>Today at a glance</h2></div>
+          <button class="secondary refresh-button" type="button" data-refresh="dashboard">Refresh dashboard</button>
+        </div>
+        <p id="dashboard-note" class="notice dashboard-note" role="status" aria-live="polite">Loading live business data…</p>
+        <div class="metric-grid" aria-label="Business metrics">
+          <article class="metric-card"><span class="metric-label">Daily active visitors</span><strong id="metric-active-users" class="metric-value" aria-live="polite">—</strong><span id="metric-active-users-detail" class="metric-detail">Privacy-preserving unique visits</span></article>
+          <article class="metric-card"><span class="metric-label">Today’s revenue</span><strong id="metric-revenue-today" class="metric-value" aria-live="polite">—</strong><span id="metric-revenue-today-detail" class="metric-detail">Verified payments only</span></article>
+          <article class="metric-card"><span class="metric-label">This month’s revenue</span><strong id="metric-revenue-month" class="metric-value" aria-live="polite">—</strong><span id="metric-revenue-month-detail" class="metric-detail">Verified payments only</span></article>
+          <article class="metric-card"><span class="metric-label">Successful orders</span><strong id="metric-orders" class="metric-value" aria-live="polite">—</strong><span id="metric-orders-detail" class="metric-detail">Today</span></article>
+          <article class="metric-card"><span class="metric-label">Published resources</span><strong id="metric-published" class="metric-value" aria-live="polite">—</strong><span id="metric-published-detail" class="metric-detail">Visible to students</span></article>
+        </div>
+        <div class="dashboard-layout">
+          <section class="panel dashboard-panel" aria-labelledby="top-resources-heading">
+            <div class="panel-heading"><div><h2 id="top-resources-heading">Top-performing PDFs</h2><p>Most successful paid resources in the selected period.</p></div><button type="button" class="text-button" data-go-view="orders">View orders</button></div>
+            <div id="dashboard-top-resources" class="performance-list" aria-live="polite"><p class="notice">Loading resource performance…</p></div>
+          </section>
+          <section class="panel dashboard-panel" aria-labelledby="recent-orders-heading">
+            <div class="panel-heading"><div><h2 id="recent-orders-heading">Recent activity</h2><p>Latest verified orders and access updates.</p></div><button type="button" class="text-button" data-go-view="feedback">View inbox</button></div>
+            <div id="dashboard-recent-orders" class="activity-list" aria-live="polite"><p class="notice">Loading recent activity…</p></div>
           </section>
         </div>
+        <section class="panel dashboard-actions" aria-labelledby="quick-actions-heading">
+          <div><p class="eyebrow">Quick actions</p><h2 id="quick-actions-heading">Keep the library moving</h2></div>
+          <div class="quick-action-buttons">
+            <button class="secondary" type="button" data-go-view="content">Add a study card</button>
+            <button class="secondary" type="button" data-go-view="bulk">Upload a batch</button>
+            <button class="secondary" type="button" data-go-view="promotions">Create an offer</button>
+            <button class="secondary" type="button" data-go-view="feedback">Review feedback</button>
+          </div>
+        </section>
       </section>
-      <div class="layout">
-        <section class="panel"><h2 id="form-heading">New study card</h2><form id="card-form">
-          <fieldset class="library-placement">
-            <legend>Library placement</legend>
-            <p class="helper field-intro">Put this card under a section or child tile you created above. It will still keep its legacy category settings below for Sample Papers, PYQs, MCQs and Important Questions.</p>
-            <label class="field" for="card-section">Section or tile<select id="card-section" name="sectionId" aria-describedby="card-section-helper"><option value="">Legacy category pages only</option></select><small class="helper" id="card-section-helper">Choose a tile for the clearest student journey, such as Class 12 → Formula Sheets.</small></label>
-            <label class="field" for="resource-label">Resource label (optional)<input id="resource-label" name="resourceLabel" maxlength="80" placeholder="e.g. Quick revision PDF"><small class="helper">Shown as a small label above this study card in the library.</small></label>
-            <label class="field" for="sort-order">Display order<input id="sort-order" name="sortOrder" type="number" min="0" max="9999" step="1" value="0" inputmode="numeric"><small class="helper">Lower numbers appear first within the selected tile.</small></label>
-            <label class="toggle-field card-publish-toggle" for="is-published"><input id="is-published" name="isPublished" type="checkbox" checked><span><strong>Published for students</strong><small>Turn this off to save a private draft while you prepare the PDF.</small></span></label>
-          </fieldset>
-          <label class="field" for="type">Legacy material type<select id="type" name="type"><option value="sample">Sample Papers</option><option value="pyq">PYQs</option><option value="mcq">MCQs</option><option value="important">Important Questions</option></select><small class="helper">Used by the original category pages. A card placed in a library tile uses that tile’s title for students.</small></label>
-          <label class="field" for="className">Legacy class<select id="className" name="className"><option value="10">Class 10</option><option value="11">Class 11</option><option value="12">Class 12</option></select><small class="helper">For JEE, NEET and custom collections, choose the tile above; its collection controls the student-facing label.</small></label>
-          <label class="field" for="subject">Subject or topic<input id="subject" name="subject" list="subject-suggestions" required maxlength="80" placeholder="e.g. Physics or Organic Chemistry"><datalist id="subject-suggestions"></datalist><small class="helper">Type any subject or topic. Class suggestions appear while you type.</small></label>
-          <label class="field" for="title">Card title<input id="title" name="title" required maxlength="140" placeholder="e.g. Electricity: 50 MCQs"></label>
-          <label class="field" for="description">Short description<textarea id="description" name="description" maxlength="500" placeholder="What students will receive"></textarea></label>
-          <label class="field" for="price">Fixed price in ₹<input id="price" name="price" type="text" value="39" readonly aria-describedby="price-helper"><small class="helper" id="price-helper">Individual study cards are always ₹39. The server checks this again before saving.</small></label>
-          <label class="check-field" for="isBundle"><input id="isBundle" name="isBundle" type="checkbox"> This is a full-course bundle (price changes automatically to ₹399)</label>
-          <div class="upload-box"><strong>Protected PDF library</strong><span>Upload a PDF once, then attach it to any study card. Files are stored privately and never linked directly to students.</span><div><label class="upload-label" for="upload-pdf">Choose PDF</label><input id="upload-pdf" type="file" accept="application/pdf,.pdf" aria-describedby="upload-name"><button id="upload-button" class="secondary" type="button">Upload selected PDF</button></div><small id="upload-name" class="helper">Maximum file size: 25 MB.</small></div>
-          <label class="field" for="fileKey">Secure PDF file<select id="fileKey" name="fileKey"><option value="">Not ready for sale yet</option></select><small class="helper">Choose a PDF from the protected papers folder. Students receive it only after verified payment.</small></label>
-          <label class="field" for="link">Public preview link (optional)<input id="link" name="link" type="url" inputmode="url" placeholder="https://..."><small class="helper">Use only for a free preview. Never paste the paid PDF URL here.</small></label>
-          <div class="actions"><button class="save" type="submit">Save study card</button><button class="secondary" id="cancel-edit" type="button" hidden>Cancel edit</button></div>
-        </form><p class="notice">Content is saved in the shared database. Adding or editing a card automatically refreshes the sitemap.</p></section>
-        <section class="panel"><div class="toolbar"><button type="button" class="secondary" id="export-data">Export backup</button><label class="secondary" style="cursor:pointer">Import backup<input id="import-data" type="file" accept="application/json" hidden></label><button type="button" class="remove logout" id="logout">Sign out</button><input id="filter-cards" class="search" type="search" placeholder="Search saved cards" aria-label="Search saved cards"></div><p class="notice">Pricing is fixed: ₹39 per individual study card and ₹399 per full-course bundle. Imports with another price are rejected.</p><p id="status" class="notice" role="status" aria-live="polite"></p><div id="cards"></div><section class="pdf-manager" aria-labelledby="pdf-heading"><h2 id="pdf-heading">Protected PDF files</h2><p class="notice">PDFs cannot be removed while a card uses them, and cannot be replaced during an active paid-download window.</p><div id="pdf-files"></div></section></section>
-      </div>
+
+      <section id="content-view" class="admin-view" role="tabpanel" aria-labelledby="tab-content" tabindex="-1" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Catalogue management</p><h2>Content library</h2></div><p>Build clear paths for Class 10, Class 11, Class 12, JEE, NEET and any future collection.</p></div>
+        <section class="panel catalog-manager" aria-labelledby="catalog-heading">
+          <div class="catalog-heading-row">
+            <div><p class="eyebrow">Your study library</p><h2 id="catalog-heading">Library sections &amp; tiles</h2></div>
+            <p class="catalog-intro">Create top-level sections such as Class 10, Class 11, Class 12, JEE or NEET. Add child tiles for Formula Sheets, Cheat Sheets, revision packs and any other collection, then place study cards under the right tile.</p>
+          </div>
+          <div class="catalog-layout">
+            <form id="section-form" class="catalog-form" autocomplete="off">
+              <input id="section-id" name="sectionId" type="hidden">
+              <fieldset>
+                <legend id="section-form-heading">Create a section or tile</legend>
+                <p class="helper field-intro">Leave Parent set to “Top-level library section” for a main area. Select a section to create a tile inside it.</p>
+                <label class="field" for="section-parent">Parent section<select id="section-parent" name="parentId" aria-describedby="section-parent-helper"><option value="">Top-level library section</option></select><small class="helper" id="section-parent-helper">A tile appears inside its selected section; tiles cannot contain further tiles.</small></label>
+                <label class="field" for="section-title">Title<input id="section-title" name="title" required maxlength="80" placeholder="e.g. Formula Sheets"></label>
+                <label class="field" for="section-description">Short description<textarea id="section-description" name="description" maxlength="280" placeholder="A clear one-line description for students"></textarea></label>
+                <label class="field" for="section-icon">Icon<select id="section-icon" name="icon" aria-describedby="section-icon-helper"><option value="📚">📚 Books</option><option value="🎓">🎓 Education</option><option value="🧪">🧪 Science</option><option value="🧮">🧮 Mathematics</option><option value="📐">📐 Formulae</option><option value="📝">📝 Practice</option><option value="⚡">⚡ Revision</option><option value="🧠">🧠 Concepts</option><option value="🎯">🎯 Exam prep</option></select><small class="helper" id="section-icon-helper">Choose from the safe built-in icons so the library stays consistent.</small></label>
+                <label class="field" for="section-order">Display order<input id="section-order" name="sortOrder" type="number" min="0" max="9999" step="1" value="0" inputmode="numeric"><small class="helper">Lower numbers appear first.</small></label>
+                <details class="advanced-settings"><summary>Tags &amp; future collection metadata</summary><div class="advanced-settings-body"><p class="helper">Tags already help students filter the library. These meta fields are saved for a future server-rendered collection page; they do not change Google results yet.</p><label class="field" for="section-meta-title">Future collection meta title<input id="section-meta-title" name="metaTitle" maxlength="60" placeholder="e.g. Class 12 Physics Formula Sheets"></label><label class="field" for="section-meta-description">Future collection meta description<textarea id="section-meta-description" name="metaDescription" maxlength="160" placeholder="A concise future search description"></textarea></label><label class="field" for="section-seo-keywords">Future collection keywords<input id="section-seo-keywords" name="seoKeywords" maxlength="240" placeholder="class 12 physics, formula sheets"></label><div class="field"><span id="section-tags-label" class="field-label">Search tags</span><div id="section-tags" class="tag-list" aria-live="polite"></div><input id="section-tag-input" class="tag-input" type="text" maxlength="50" aria-labelledby="section-tags-label" aria-describedby="section-tags-helper" placeholder="Type a tag and press Enter"><small id="section-tags-helper" class="helper">Use tags like subject, year, chapter or difficulty. Press Enter or comma to add.</small></div></div></details>
+                <div class="toggle-grid" aria-label="Section visibility"><label class="toggle-field" for="section-published"><input id="section-published" name="isPublished" type="checkbox" checked><span><strong>Published</strong><small>Visible to students when its parent is published.</small></span></label><label class="toggle-field" for="section-home"><input id="section-home" name="showOnHome" type="checkbox"><span><strong>Show on home</strong><small id="section-home-helper">Feature this top-level section on the homepage.</small></span></label></div>
+              </fieldset>
+              <div class="actions catalog-actions"><button class="save" id="section-submit" type="submit">Create section</button><button class="secondary" id="section-cancel" type="button" hidden>Cancel edit</button></div>
+            </form>
+            <section class="catalog-tree" aria-labelledby="section-list-heading"><div class="catalog-tree-heading"><div><h3 id="section-list-heading">Current library structure</h3><p class="notice">Edit a section or tile whenever you need to update wording, discovery data, order or student visibility.</p></div></div><div id="section-list" class="section-list" role="region" aria-live="polite" aria-labelledby="section-list-heading"></div></section>
+          </div>
+        </section>
+
+        <div class="layout">
+          <section class="panel"><h2 id="form-heading">New study card</h2><form id="card-form">
+            <fieldset class="library-placement"><legend>Library placement</legend><p class="helper field-intro">Put this card under a section or child tile you created above. It keeps legacy category settings below for Sample Papers, PYQs, MCQs and Important Questions.</p><label class="field" for="card-section">Section or tile<select id="card-section" name="sectionId" aria-describedby="card-section-helper"><option value="">Legacy category pages only</option></select><small class="helper" id="card-section-helper">Choose a tile for the clearest student journey, such as Class 12 → Formula Sheets.</small></label><label class="field" for="resource-label">Resource label (optional)<input id="resource-label" name="resourceLabel" maxlength="80" placeholder="e.g. Quick revision PDF"><small class="helper">Shown as a small label above this study card in the library.</small></label><label class="field" for="sort-order">Display order<input id="sort-order" name="sortOrder" type="number" min="0" max="9999" step="1" value="0" inputmode="numeric"><small class="helper">Lower numbers appear first within the selected tile.</small></label><label class="toggle-field card-publish-toggle" for="is-published"><input id="is-published" name="isPublished" type="checkbox" checked><span><strong>Published for students</strong><small>A published card is visible only when its parent section or tile is also published.</small></span></label></fieldset>
+            <label class="field" for="type">Legacy material type<select id="type" name="type"><option value="sample">Sample Papers</option><option value="pyq">PYQs</option><option value="mcq">MCQs</option><option value="important">Important Questions</option></select><small class="helper">Used by original category pages. A card placed in a library tile uses that tile’s title for students.</small></label>
+            <label class="field" for="className">Legacy class<select id="className" name="className"><option value="10">Class 10</option><option value="11">Class 11</option><option value="12">Class 12</option></select><small class="helper">For JEE, NEET and custom collections, choose the tile above; its collection controls the student-facing label.</small></label>
+            <label class="field" for="subject">Subject or topic<input id="subject" name="subject" list="subject-suggestions" required maxlength="80" placeholder="e.g. Physics or Organic Chemistry"><datalist id="subject-suggestions"></datalist><small class="helper">Type any subject or topic. Class suggestions appear while you type.</small></label>
+            <label class="field" for="title">Card title<input id="title" name="title" required maxlength="140" placeholder="e.g. Electricity: 50 MCQs"></label>
+            <label class="field" for="description">Short description<textarea id="description" name="description" maxlength="500" placeholder="What students will receive"></textarea></label>
+            <details class="advanced-settings"><summary>SEO &amp; discovery settings</summary><div class="advanced-settings-body"><p class="helper">Use an accurate title, short description and tags so students and search engines can find this resource.</p><label class="field" for="card-meta-title">Meta title<input id="card-meta-title" name="metaTitle" maxlength="60" placeholder="e.g. Class 10 Electricity MCQs PDF | Best Education"></label><label class="field" for="card-meta-description">Meta description<textarea id="card-meta-description" name="metaDescription" maxlength="160" placeholder="A concise Google search description"></textarea></label><label class="field" for="card-seo-keywords">SEO keywords<input id="card-seo-keywords" name="seoKeywords" maxlength="240" placeholder="class 10 electricity mcqs, cbse science"></label><div class="field"><span id="card-tags-label" class="field-label">Search tags</span><div id="card-tags" class="tag-list" aria-live="polite"></div><input id="card-tag-input" class="tag-input" type="text" maxlength="50" aria-labelledby="card-tags-label" aria-describedby="card-tags-helper" placeholder="Type a tag and press Enter"><small id="card-tags-helper" class="helper">Add year, difficulty, chapter and subject tags. Press Enter or comma to add.</small></div></div></details>
+            <label class="field" for="price">Fixed price in ₹<input id="price" name="price" type="text" value="39" readonly aria-describedby="price-helper"><small class="helper" id="price-helper">Individual study cards are always ₹39. The server checks this again before saving.</small></label>
+            <label class="check-field" for="isBundle"><input id="isBundle" name="isBundle" type="checkbox"> This is a full-course bundle (price changes automatically to ₹399)</label>
+            <div class="upload-box"><strong>Protected PDF library</strong><span>Upload a PDF once, then attach it to any study card. Files are stored privately and never linked directly to students.</span><div><label class="upload-label secondary" for="upload-pdf">Choose PDF</label><input id="upload-pdf" type="file" accept="application/pdf,.pdf" aria-describedby="upload-name"><button id="upload-button" class="secondary" type="button">Upload selected PDF</button></div><small id="upload-name" class="helper">Maximum file size: 25 MB.</small></div>
+            <label class="field" for="fileKey">Secure PDF file<select id="fileKey" name="fileKey"><option value="">Not ready for sale yet</option></select><small class="helper">Choose a PDF from the protected papers folder. Students receive it only after verified payment.</small></label>
+            <label class="field" for="link">Public preview link (optional)<input id="link" name="link" type="url" inputmode="url" placeholder="https://…"><small class="helper">Use only for a free preview. Never paste the paid PDF URL here.</small></label>
+            <div class="actions"><button class="save" type="submit">Save study card</button><button class="secondary" id="cancel-edit" type="button" hidden>Cancel edit</button></div>
+          </form><p class="notice">Content is saved in the shared database. Adding or editing a card automatically refreshes the sitemap.</p></section>
+          <section class="panel"><div class="toolbar"><button type="button" class="secondary" id="export-data">Export backup</button><label class="secondary import-label" for="import-data">Import backup<input id="import-data" type="file" accept="application/json" hidden></label><button type="button" class="remove logout" id="logout" data-logout>Sign out</button><input id="filter-cards" class="search" type="search" placeholder="Search saved cards" aria-label="Search saved cards"></div><p class="notice">Pricing is fixed: ₹39 per individual study card and ₹399 per full-course bundle. Imports with another price are rejected.</p><p id="status" class="notice" role="status" aria-live="polite"></p><div id="cards"></div><section class="pdf-manager" aria-labelledby="pdf-heading"><h2 id="pdf-heading">Protected PDF files</h2><p class="notice">PDFs cannot be removed while a card uses them, and cannot be replaced during an active paid-download window.</p><div id="pdf-files"></div></section></section>
+        </div>
+      </section>
+
+      <section id="orders-view" class="admin-view" role="tabpanel" aria-labelledby="tab-orders" tabindex="-1" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Revenue operations</p><h2>Orders &amp; access</h2></div><p>Review verified purchases, provide access and investigate failed or disputed payments.</p></div>
+        <section class="panel"><div class="toolbar management-toolbar"><input id="order-search" class="search" type="search" placeholder="Search order, student or resource" aria-label="Search orders"><label class="filter-label" for="order-status-filter">Status<select id="order-status-filter"><option value="">All statuses</option><option value="created">Created</option><option value="captured">Captured</option><option value="fulfilled">Fulfilled</option><option value="failed">Failed</option><option value="refunded">Refunded</option><option value="revoked">Access revoked</option></select></label><button class="secondary" type="button" data-refresh="orders">Refresh</button></div><p id="orders-note" class="notice" role="status" aria-live="polite">Orders are loaded only for authenticated administrators.</p><div id="orders-content" class="management-content" aria-live="polite"></div></section>
+      </section>
+
+      <section id="students-view" class="admin-view" role="tabpanel" aria-labelledby="tab-students" tabindex="-1" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Student records</p><h2>Students &amp; permissions</h2></div><p>See students with a verified purchase, their library access and purchase history.</p></div>
+        <section class="panel"><div class="toolbar management-toolbar"><input id="student-search" class="search" type="search" placeholder="Search name or email" aria-label="Search students"><button class="secondary" type="button" data-refresh="students">Refresh</button></div><p id="students-note" class="notice" role="status" aria-live="polite">Personal data is visible only to authenticated administrators.</p><div id="students-content" class="management-content" aria-live="polite"></div></section>
+      </section>
+
+      <section id="bulk-view" class="admin-view" role="tabpanel" aria-labelledby="tab-bulk" tabindex="-1" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Batch publishing</p><h2>Bulk upload</h2></div><p>Upload a batch of protected PDFs and a CSV that describes how each file should appear in the library.</p></div>
+        <div class="two-column-view"><section class="panel"><h2>Prepare your batch</h2><ol class="steps-list"><li>Give each PDF a clear, unique filename.</li><li>Download the CSV template and add one row per study card.</li><li>For a custom collection, copy the section or tile ID from Content library into the CSV’s <code>sectionId</code> column.</li><li>Use <code>false</code> in the CSV’s <code>isPublished</code> column to create drafts, then upload the PDFs and CSV together.</li></ol><button id="download-bulk-template" class="secondary" type="button">Download CSV template</button><p class="notice">The filename in the CSV must match the PDF filename exactly. A batch supports up to 10 PDFs, 25 MB per PDF and 90 MB total including the CSV. Each batch is validated as one secure operation.</p></section><section class="panel"><h2>Upload files</h2><form id="bulk-form"><label class="field" for="bulk-pdfs">PDF files<input id="bulk-pdfs" name="files" type="file" accept="application/pdf,.pdf" multiple required><small class="helper">Choose 1–10 PDFs. Each file must be a PDF no larger than 25 MB; the complete upload must remain below 90 MB.</small></label><label class="field" for="bulk-csv">CSV metadata file<input id="bulk-csv" name="metadata" type="file" accept=".csv,text/csv" required><small class="helper">Includes title, section, subject, description, tags and publishing options. Copy a section ID from the library tree for custom collections. The CSV’s <code>isPublished</code> value controls whether each card is a draft or published.</small></label><div class="actions"><button id="bulk-submit" class="save" type="submit">Upload secure batch</button></div></form><p id="bulk-status" class="notice" role="status" aria-live="polite"></p><div id="bulk-result" class="bulk-result" aria-live="polite"></div></section></div>
+      </section>
+
+      <section id="promotions-view" class="admin-view" role="tabpanel" aria-labelledby="tab-promotions" tabindex="-1" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Offers &amp; pricing</p><h2>Promotion drafts</h2></div><p>Save campaign rules now. Discount codes, bundle offers and subscriptions are not applied at checkout until promotion redemption is explicitly enabled.</p></div>
+        <div class="layout promotions-layout"><section class="panel"><h2 id="promotion-form-heading">Create an offer</h2><form id="promotion-form"><input id="promotion-id" type="hidden"><label class="field" for="promotion-code">Code<input id="promotion-code" maxlength="32" autocomplete="off" required placeholder="e.g. NEET2025"><small class="helper">Use 3–32 letters, numbers, hyphens or underscores. Codes are case-insensitive for students.</small></label><label class="field" for="promotion-name">Offer name<input id="promotion-name" maxlength="100" required placeholder="e.g. NEET revision week"></label><label class="field" for="promotion-description">Offer description<textarea id="promotion-description" maxlength="500" placeholder="Internal description of the offer"></textarea></label><label class="field" for="promotion-kind">Offer type<select id="promotion-kind"><option value="discount">Discount code</option><option value="bundle">Bundle offer</option><option value="subscription">Subscription tier</option></select></label><label class="field" for="promotion-discount-type">Discount<select id="promotion-discount-type"><option value="percent">Percentage off</option><option value="fixed">Fixed amount off (₹)</option></select></label><label class="field" for="promotion-value">Discount value<input id="promotion-value" type="number" min="0" max="100000" step="1" inputmode="numeric" required placeholder="e.g. 15"></label><label class="field" for="promotion-applies-to">Eligible card IDs (optional)<input id="promotion-applies-to" maxlength="500" placeholder="card-id-1, card-id-2"><small class="helper">Leave blank for all eligible resources. Use comma-separated study-card IDs, not student-facing names.</small></label><label class="field" for="promotion-bundle-card-ids">Bundle card IDs (optional)<input id="promotion-bundle-card-ids" maxlength="500" placeholder="card-id-1, card-id-2"><small class="helper">For a bundle, list the study-card IDs to group together.</small></label><label class="field" for="promotion-limit">Maximum redemptions (optional)<input id="promotion-limit" type="number" min="0" max="1000000" step="1" inputmode="numeric" placeholder="0 for no limit"></label><label class="field" for="promotion-billing-interval">Subscription interval<select id="promotion-billing-interval"><option value="none">No recurring billing</option><option value="monthly">Monthly</option><option value="yearly">Yearly</option></select><small class="helper">Subscription records are stored for planning only; recurring checkout is not available yet.</small></label><div class="date-grid"><label class="field" for="promotion-starts">Starts<input id="promotion-starts" type="datetime-local"></label><label class="field" for="promotion-ends">Ends<input id="promotion-ends" type="datetime-local"></label></div><label class="toggle-field" for="promotion-active"><input id="promotion-active" type="checkbox" checked><span><strong>Offer active</strong><small>Marks the offer ready for a future promotion launch; checkout does not apply it yet.</small></span></label><div class="actions"><button id="promotion-submit" class="save" type="submit">Save offer</button><button id="promotion-cancel" class="secondary" type="button" hidden>Cancel edit</button></div></form></section><section class="panel"><div class="panel-heading"><div><h2>Current offers</h2><p>Deactivate an offer instead of deleting it when you need to preserve its history.</p></div><button class="secondary" type="button" data-refresh="promotions">Refresh</button></div><p id="promotions-note" class="notice" role="status" aria-live="polite"></p><div id="promotions-content" class="management-content" aria-live="polite"></div></section></div>
+      </section>
+
+      <section id="feedback-view" class="admin-view" role="tabpanel" aria-labelledby="tab-feedback" tabindex="-1" hidden>
+        <div class="view-heading"><div><p class="eyebrow">Quality inbox</p><h2>Student feedback &amp; error reports</h2></div><p>Keep resources accurate by reviewing student-reported issues and marking each report when it is resolved.</p></div>
+        <section class="panel"><div class="toolbar management-toolbar"><input id="feedback-search" class="search" type="search" placeholder="Search reports, resource or email" aria-label="Search feedback reports"><label class="filter-label" for="feedback-status-filter">Show<select id="feedback-status-filter"><option value="">All reports</option><option value="open">Open</option><option value="in_progress">In progress</option><option value="resolved">Resolved</option></select></label><button class="secondary" type="button" data-refresh="feedback">Refresh inbox</button></div><p id="feedback-note" class="notice" role="status" aria-live="polite">Reports submitted by students will appear here.</p><div id="feedback-content" class="feedback-list" aria-live="polite"></div></section>
+      </section>
     </div>
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true" hidden></div>
-  <script src="admin.js"></script>
+  <script src="admin.js" defer></script>
 </body>
 </html>

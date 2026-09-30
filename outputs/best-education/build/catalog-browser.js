@@ -64,6 +64,7 @@ function sectionById(id) { return catalog.sections.find((section) => section.id 
 function cardsFor(sectionId) { return catalog.cards.filter((card) => card.sectionId === sectionId); }
 function childrenFor(sectionId) { return catalog.sections.filter((section) => section.parentId === sectionId); }
 function sectionIcon(section) { return section.icon || '📚'; }
+function sectionHref(section) { return section?.slug ? `/collection/${encodeURIComponent(section.slug)}` : '/library.html'; }
 
 function resourceAction(card) {
   if (!card.available) return '<span class="coming-soon">Coming soon</span>';
@@ -129,8 +130,7 @@ function renderCollections() {
     catalogGrid.innerHTML = '<div class="catalog-empty"><strong>The library is being prepared.</strong>New class and exam collections will appear here as Best Education publishes them.</div>';
     return;
   }
-  catalogGrid.innerHTML = roots.map((section) => `<button class="catalog-tile" type="button" data-section-id="${escapeHTML(section.id)}"><span class="catalog-tile-icon" aria-hidden="true">${escapeHTML(sectionIcon(section))}</span><h3>${escapeHTML(section.title)}</h3><p>${escapeHTML(section.description || 'Browse the resources in this collection.')}</p><small>Open collection →</small></button>`).join('');
-  catalogGrid.querySelectorAll('[data-section-id]').forEach((button) => button.addEventListener('click', () => renderSection(button.dataset.sectionId)));
+  catalogGrid.innerHTML = roots.map((section) => `<a class="catalog-tile" href="${escapeHTML(sectionHref(section))}"><span class="catalog-tile-icon" aria-hidden="true">${escapeHTML(sectionIcon(section))}</span><h3>${escapeHTML(section.title)}</h3><p>${escapeHTML(section.description || 'Browse the resources in this collection.')}</p><small>Open collection →</small></a>`).join('');
 }
 
 function renderResources(section) {
@@ -166,12 +166,8 @@ function renderSection(id) {
   catalogHeading.textContent = section.title;
   catalogNote.textContent = section.description || 'Choose a tile to browse the published resources.';
   const directResources = cardsFor(section.id);
-  const allResources = directResources.length ? `<button class="catalog-tile" type="button" data-section-id="${escapeHTML(section.id)}"><span class="catalog-tile-icon" aria-hidden="true">${escapeHTML(sectionIcon(section))}</span><h3>All ${escapeHTML(section.title)} resources</h3><p>Browse every published resource directly in this collection.</p><small>Browse resources →</small></button>` : '';
-  catalogGrid.innerHTML = allResources + children.map((child) => `<button class="catalog-tile" type="button" data-section-id="${escapeHTML(child.id)}"><span class="catalog-tile-icon" aria-hidden="true">${escapeHTML(sectionIcon(child))}</span><h3>${escapeHTML(child.title)}</h3><p>${escapeHTML(child.description || 'Browse the resources in this tile.')}</p><small>Open tile →</small></button>`).join('');
-  catalogGrid.querySelectorAll('[data-section-id]').forEach((button) => button.addEventListener('click', () => {
-    const next = button.dataset.sectionId;
-    if (next === section.id) renderResources(section); else renderSection(next);
-  }));
+  const allResources = directResources.length ? `<a class="catalog-tile" href="${escapeHTML(sectionHref(section))}"><span class="catalog-tile-icon" aria-hidden="true">${escapeHTML(sectionIcon(section))}</span><h3>All ${escapeHTML(section.title)} resources</h3><p>Browse every published resource directly in this collection.</p><small>Browse resources →</small></a>` : '';
+  catalogGrid.innerHTML = allResources + children.map((child) => `<a class="catalog-tile" href="${escapeHTML(sectionHref(child))}"><span class="catalog-tile-icon" aria-hidden="true">${escapeHTML(sectionIcon(child))}</span><h3>${escapeHTML(child.title)}</h3><p>${escapeHTML(child.description || 'Browse the resources in this tile.')}</p><small>Open tile →</small></a>`).join('');
 }
 
 function renderFromHash() {

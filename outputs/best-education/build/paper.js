@@ -140,7 +140,10 @@ const recoveryKey = `best-education-purchase-${slug}`;
 function readRecovery() {
   try {
     const value = JSON.parse(localStorage.getItem(recoveryKey) || 'null');
-    if (!value || !value.orderId || !value.recoveryToken || new Date(value.expiresAt).getTime() < Date.now()) {
+    // The browser retains only a non-secret order reference. The matching
+    // recovery bearer token lives in a short-lived HttpOnly cookie, so a
+    // same-origin script cannot read or copy it.
+    if (!value || !value.orderId || new Date(value.expiresAt).getTime() < Date.now()) {
       localStorage.removeItem(recoveryKey);
       return null;
     }
@@ -151,11 +154,10 @@ function readRecovery() {
 }
 
 function saveRecovery(checkout) {
-  if (!checkout.recovery?.token) return;
+  if (!checkout?.order?.id || !checkout.recovery?.expiresAt) return;
   try {
     localStorage.setItem(recoveryKey, JSON.stringify({
       orderId: checkout.order.id,
-      recoveryToken: checkout.recovery.token,
       expiresAt: checkout.recovery.expiresAt
     }));
   } catch { /* Browser storage is optional; the normal checkout callback still works. */ }
@@ -175,7 +177,7 @@ async function recoverPurchase() {
   const pending = readRecovery();
   if (!pending) return;
   try {
-    const recovered = await request('/api/payment/recover', { method: 'POST', body: JSON.stringify(pending) });
+    const recovered = await request('/api/payment/recover', { method: 'POST', body: JSON.stringify({ orderId: pending.orderId }) });
     if (recovered.downloadUrl) return showVerifiedDownload(recovered);
     if (recovered.pending) {
       const status = document.querySelector('#payment-status');
@@ -284,7 +286,7 @@ function feedbackMarkup() {
 }
 
 function purchaseMarkup() {
-  return `<form id="purchase-form" class="purchase-form"><div class="purchase-field"><label for="buyer-email">Email for your PDF access <span aria-hidden="true">*</span></label><input id="buyer-email" name="buyerEmail" type="email" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="254" required aria-describedby="buyer-help" placeholder="you@example.com"></div><div class="purchase-field"><label for="buyer-name">Display name <span class="field-optional">Optional</span></label><input id="buyer-name" name="buyerName" type="text" autocomplete="name" maxlength="80" placeholder="Your name"></div><p id="buyer-help" class="buyer-help">We use your email only to provide purchase access and assist with support. It is never sent to analytics.</p><button id="buy" class="button" type="submit">Buy securely</button><p class="notice" id="payment-status" role="status" aria-live="polite"></p></form>`;
+  return `<form id="purchase-form" class="purchase-form"><div class="purchase-field"><label for="buyer-email">Email for your purchase record <span aria-hidden="true">*</span></label><input id="buyer-email" name="buyerEmail" type="email" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false" maxlength="254" required aria-describedby="buyer-help" placeholder="you@example.com"></div><div class="purchase-field"><label for="buyer-name">Display name <span class="field-optional">Optional</span></label><input id="buyer-name" name="buyerName" type="text" autocomplete="name" maxlength="80" placeholder="Your name"></div><p id="buyer-help" class="buyer-help">We use your email for the purchase record and support. It is never sent to analytics. Save the private download link shown after payment.</p><button id="buy" class="button" type="submit">Buy securely</button><p class="notice" id="payment-status" role="status" aria-live="polite"></p></form>`;
 }
 
 async function submitFeedback(event, paper) {

@@ -11,6 +11,17 @@ const catalog = {
 };
 
 const type = document.body.dataset.type;
+
+// The four resource-category pages share this script. Load the tiny analytics
+// module once here rather than duplicating its privacy and opt-out behaviour in
+// each static HTML file.
+if (!document.querySelector('script[src="analytics.js"]')) {
+  const analytics = document.createElement('script');
+  analytics.src = 'analytics.js';
+  analytics.async = true;
+  document.head.append(analytics);
+}
+
 const labels = { sample: 'Sample Paper', pyq: 'Previous Year Questions', mcq: 'MCQ Practice Set', important: 'Important Questions' };
 const slugs = { sample: 'sample-papers.html', pyq: 'pyqs.html', mcq: 'mcqs.html', important: 'important-questions.html' };
 const seoTitle = `${labels[type]} for Classes 10, 11 & 12 | Best Education`;

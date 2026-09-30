@@ -73,7 +73,7 @@ If the R2 activation page is still awaiting a billing profile, do **not** attach
 pnpm run cloudflare:catalog-preview
 ```
 
-It deploys the shared catalogue, search, and protected admin area to the same `workers.dev` address without an R2 binding. Students can browse the library, while the admin can create sections and draft cards. PDF upload, paid checkout, and downloads deliberately show a clear unavailable message until private R2 storage is enabled. After activating R2, deploy the normal configuration with `pnpm run cloudflare:deploy`; it attaches the private `PAPERS` bucket without changing the public Worker URL.
+It deploys the shared catalogue, search, and protected admin area to the same `workers.dev` address without an R2 binding. Students can browse the library, while the admin can create sections and draft cards. PDF upload, paid checkout, and downloads deliberately show a clear unavailable message until private R2 storage is enabled. After activating R2, deploy the normal configuration with `pnpm run cloudflare:deploy`; it attaches the private `PAPERS` bucket without changing the public Worker URL. Because this preview uses the same Worker name, do not run the catalogue-preview command after R2 is live unless you deliberately want to disable the R2 binding and all purchases.
 
 ## Legacy Node / Render fallback
 
@@ -85,6 +85,7 @@ If you later need a Render-based paid deployment, backport and test those protec
 
 ```powershell
 npm run check
+npm run test:catalog
 ```
 
 The health endpoint is available at `/healthz`.

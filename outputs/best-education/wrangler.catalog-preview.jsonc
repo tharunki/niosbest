@@ -7,11 +7,16 @@
   "compatibility_date": "2026-09-27",
   "workers_dev": true,
   "preview_urls": false,
+  "triggers": {
+    // Keep preview and production retention settings aligned. 03:30 UTC is
+    // 09:00 every day in India (Asia/Kolkata).
+    "crons": ["30 3 * * *"]
+  },
   "assets": {
     "directory": "./build",
     "binding": "ASSETS",
     "html_handling": "none",
-    "run_worker_first": ["/", "/index", "/admin", "/library", "/sample-papers", "/pyqs", "/mcqs", "/important-questions", "/index.html", "/admin.html", "/library.html", "/api/*", "/paper/*", "/sitemap.xml", "/robots.txt", "/healthz", "/sample-papers.html", "/pyqs.html", "/mcqs.html", "/important-questions.html"]
+    "run_worker_first": ["/", "/index", "/admin", "/library", "/privacy", "/terms", "/sample-papers", "/pyqs", "/mcqs", "/important-questions", "/index.html", "/admin.html", "/library.html", "/privacy.html", "/terms.html", "/api/*", "/paper/*", "/collection/*", "/sitemap.xml", "/robots.txt", "/healthz", "/sample-papers.html", "/pyqs.html", "/mcqs.html", "/important-questions.html"]
   },
   "d1_databases": [
     {

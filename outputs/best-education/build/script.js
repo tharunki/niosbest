@@ -62,7 +62,8 @@ function renderFeaturedCollections(collections) {
   homeCollectionGrid.innerHTML = featured.map(collection => {
     const count = featuredCardCount(collection);
     const note = count ? `${count} published resource${count === 1 ? '' : 's'} to explore` : 'New resources are being prepared';
-    return `<a class="home-library-card" href="library.html#${encodeURIComponent(collection.slug || '')}"><span class="home-library-icon" aria-hidden="true">${escapeHTML(collection.icon || '📚')}</span><h3>${escapeHTML(collection.title || 'Study collection')}</h3><p>${escapeHTML(collection.description || 'Choose a tile and find the material you need.')}</p><small>${escapeHTML(note)} →</small></a>`;
+    const href = collection.slug ? `/collection/${encodeURIComponent(collection.slug)}` : 'library.html';
+    return `<a class="home-library-card" href="${escapeHTML(href)}"><span class="home-library-icon" aria-hidden="true">${escapeHTML(collection.icon || '📚')}</span><h3>${escapeHTML(collection.title || 'Study collection')}</h3><p>${escapeHTML(collection.description || 'Choose a tile and find the material you need.')}</p><small>${escapeHTML(note)} →</small></a>`;
   }).join('');
   homeCollections.hidden = false;
 }
@@ -133,37 +134,3 @@ search?.addEventListener('keydown', event => { if (event.key === 'Enter') { even
 fetchPapers('', true);
 const scheduleLibraryShelf = window.requestIdleCallback || (callback => setTimeout(callback, 120));
 scheduleLibraryShelf(() => { void loadFeaturedCollections(); });
-
-function todayKey() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
-function reportAnonymousVisit() {
-  // This intentionally contains no account, device, name, email, or browsing data.
-  // The server is responsible for rate-limiting and aggregating this minimal signal.
-  if (location.protocol === 'file:' || navigator.doNotTrack === '1' || navigator.onLine === false) return;
-  const day = todayKey();
-  const sessionKey = `best-education-visit-session-${day}`;
-  const dayKey = `best-education-visit-${day}`;
-  try {
-    if (sessionStorage.getItem(sessionKey) || localStorage.getItem(dayKey)) return;
-    sessionStorage.setItem(sessionKey, '1');
-    localStorage.setItem(dayKey, '1');
-  } catch {
-    if (window.__bestEducationVisitReported) return;
-    window.__bestEducationVisitReported = true;
-  }
-  void fetch('/api/analytics/visit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: '{}',
-    credentials: 'omit',
-    cache: 'no-store',
-    keepalive: true,
-    referrerPolicy: 'no-referrer'
-  }).catch(() => { /* Analytics must never affect the learner experience. */ });
-}
-
-const scheduleAnalytics = window.requestIdleCallback || (callback => setTimeout(callback, 900));
-scheduleAnalytics(reportAnonymousVisit);
