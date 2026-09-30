@@ -47,8 +47,12 @@ assert.match(serverSource, /async function queueSync\(studentId, trigger = 'manu
 assert.match(serverSource, /if \(process\.env\.NIOS_SYNC_MODE === 'official' && \(!isProduction \|\| productionWritesReady\)\) setInterval\(async \(\) => \{\s*if \(isProduction && !productionWritesReady\) return;/, 'the official-sync scheduler must stay idle until production durability is ready');
 assert.match(serverSource, /ADMIN_ACCOUNT_RECOVERY_EMAIL/, 'owner recovery must be bound to a configured owner email');
 assert.match(serverSource, /adminRecoveryExpiresAt > Date\.now\(\) && adminRecoveryExpiresAt <= Date\.now\(\) \+ maxRecoveryLifetimeMs/, 'owner recovery must be short-lived');
-assert.match(serverSource, /stateOnlyOwnerRecovery = path === '\/api\/auth\/admin-recovery' && stateStore\.durable/, 'owner recovery must require durable state even if document storage is unavailable');
+assert.match(serverSource, /stateOnlyOwnerRecovery = \(path === '\/api\/auth\/admin-recovery' \|\| path === '\/api\/auth\/admin-recovery\/session'\) && stateStore\.durable/, 'both owner-recovery requests must require durable state even if document storage is unavailable');
 assert.match(serverSource, /user\.sessionVersion = sessionVersion\(user\) \+ 1;/, 'password changes must invalidate existing sessions');
+assert.match(serverSource, /const ownerRecoveryCookieName = isProduction \? '__Host-nios_owner_recovery'/, 'owner recovery must use a host-only secure cookie in production');
+assert.match(serverSource, /method === 'POST' && path === '\/api\/auth\/admin-recovery\/session'/, 'recovery handoff must exchange its key only in a POST body');
+assert.doesNotMatch(serverSource, /GET' && path === '\/api\/auth\/admin-recovery\/session'/, 'recovery keys must never be accepted through a URL query string');
+assert.match(serverSource, /isSamePublicOrigin\(request\)/, 'recovery requests must be same-origin');
 assert.match(recoveryPageSource, /<meta name="referrer" content="no-referrer">/, 'recovery pages must not leak recovery context through referrers');
 assert.match(recoveryPageSource, /const handoff=new URLSearchParams\(location\.hash\.replace\(\/\^#\/,''\)\)/, 'a recovery handoff must use a non-network URL fragment');
 assert.match(recoveryPageSource, /history\.replaceState\(null,'',location\.pathname\+location\.search\)/, 'the recovery fragment must be removed before the owner uses the form');

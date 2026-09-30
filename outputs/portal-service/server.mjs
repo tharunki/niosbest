@@ -398,6 +398,35 @@ function b64(value) { return Buffer.from(value).toString('base64url'); }
 function sessionVersion(user) { const value = Number(user?.sessionVersion || 0); return Number.isSafeInteger(value) && value >= 0 ? value : 0; }
 function issueSession(user) { if (!studentEmailIsVerified(user)) throw Object.assign(new Error('Verify your email address before signing in.'), { status: 403 }); const payload = b64(JSON.stringify({ sub: user.id, studentId: user.studentId || null, role: user.role, emailVerified: user.role === 'student', sv: sessionVersion(user), exp: Date.now() + 1000 * 60 * 60 * 12 })); const signature = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); return `${payload}.${signature}`; }
 function cookieValue(request, name) { const match = String(request.headers.cookie || '').split(';').map(item => item.trim()).find(item => item.startsWith(`${name}=`)); return match ? decodeURIComponent(match.slice(name.length + 1)) : ''; }
+const ownerRecoveryCookieName = isProduction ? '__Host-nios_owner_recovery' : 'nios_owner_recovery';
+// The owner-recovery cookie never contains the raw recovery key. It is a
+// short-lived, signed assertion tied to the current key hash and allowlisted
+// owner. This keeps a recovery credential out of forms and browser history.
+function issueOwnerRecoverySession() {
+  if (!adminRecoveryEnabled()) return '';
+  const payload = b64(JSON.stringify({
+    aud: 'owner-recovery', email: adminRecoveryEmail, recoveryHash: adminRecoveryTokenHash,
+    exp: Math.min(adminRecoveryExpiresAt, Date.now() + 5 * 60 * 1000)
+  }));
+  const signature = createHmac('sha256', encryptionKey).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+function readOwnerRecoverySession(request) {
+  const token = cookieValue(request, ownerRecoveryCookieName), [payload, signature] = token.split('.');
+  if (!payload || !signature) return null;
+  const expected = createHmac('sha256', encryptionKey).update(payload).digest('base64url');
+  if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return claims.aud === 'owner-recovery' && claims.exp > Date.now() && claims.email === adminRecoveryEmail && claims.recoveryHash === adminRecoveryTokenHash ? claims : null;
+  } catch { return null; }
+}
+function ownerRecoveryCookie(value = '', maxAge = 0) {
+  return `${ownerRecoveryCookieName}=${encodeURIComponent(value)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${isProduction ? '; Secure' : ''}`;
+}
+function isSamePublicOrigin(request) {
+  return Boolean(publicOrigin && String(request.headers.origin || '') === publicOrigin.origin);
+}
 function readSession(request) { const bearer = isProduction ? '' : String(request.headers.authorization || '').replace(/^Bearer\s+/i, ''); const token = cookieValue(request, 'nios_session') || bearer; const [payload, signature] = token.split('.'); if (!payload || !signature) return null; const expected = createHmac('sha256', encryptionKey).update(payload).digest('base64url'); if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null; try { const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); return claims.exp > Date.now() && (claims.role !== 'student' || claims.emailVerified === true) ? claims : null; } catch { return null; } }
 function sessionMatchesUser(session, user) { return Boolean(session && user && session.sub === user.id && session.role === user.role && Number(session.sv || 0) === sessionVersion(user) && studentEmailIsVerified(user)); }
 async function readCurrentSession(request, state = null) {
@@ -1527,7 +1556,7 @@ const server = createServer(async (request, response) => {
     // remain available with an actionable response while Supabase is set up.
     const mutatingApiRequest = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) && path.startsWith('/api/');
     const safeWithoutDurableState = new Set(['/api/auth/login', '/api/auth/logout', '/api/counselor']);
-    const stateOnlyOwnerRecovery = path === '/api/auth/admin-recovery' && stateStore.durable;
+    const stateOnlyOwnerRecovery = (path === '/api/auth/admin-recovery' || path === '/api/auth/admin-recovery/session') && stateStore.durable;
     if (mutatingApiRequest && !productionWritesReady && !safeWithoutDurableState.has(path) && !stateOnlyOwnerRecovery) {
       return send(response, 503, {
         error: 'Admissions, document uploads, payments, and portal changes are temporarily unavailable while durable database storage is configured.',
@@ -1670,21 +1699,40 @@ const server = createServer(async (request, response) => {
     }
     if (method === 'POST' && path === '/api/auth/logout') return send(response, 200, { ok: true }, { 'set-cookie': `nios_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${isProduction ? '; Secure' : ''}` });
     if (method === 'POST' && path === '/api/auth/accept-invite') { const input = await body(request), token = String(input.token || ''), password = String(input.password || ''), throttleKey = enforceAuthThrottle(request, 'accept-invite', token || 'unknown', 8); if (token.length < 32 || password.length < 12) return send(response, 422, { error: 'Use a valid invitation and a password of at least 12 characters.' }); const tokenHash = createHash('sha256').update(token).digest('hex'); const accepted = await updateState(state => { const user = state.users.find(item => item.inviteTokenHash === tokenHash && Date.parse(item.inviteExpiresAt || '') > Date.now()); if (!user) throw Object.assign(new Error('This invitation is invalid or expired.'), { status: 410 }); user.passwordHash = hashPassword(password); user.requiresPasswordSetup = false; delete user.inviteTokenHash; delete user.inviteExpiresAt; user.passwordSetAt = now(); user.sessionVersion = sessionVersion(user) + 1; state.audit.push({ id: uid('audit'), at: now(), action: 'staff.invite-accepted', staffId: user.id, role: user.role }); return user; }); clearAuthThrottle(throttleKey); return send(response, 200, { user: publicUser(accepted) }); }
+    // The one-time key arrives only in a same-origin POST body from a URL
+    // fragment. It is never placed in a query string, server logs, or a form
+    // field, and is exchanged for a short-lived HttpOnly browser session.
+    if (method === 'POST' && path === '/api/auth/admin-recovery/session') {
+      const throttleKey = enforceAuthThrottle(request, 'admin-recovery-session', 'owner-recovery', 5);
+      const input = await body(request);
+      const token = String(input.token || '');
+      if (!isSamePublicOrigin(request) || !adminRecoveryEnabled() || !matchesAdminRecoveryToken(token)) return send(response, 404, { error: 'Not found' });
+      const recoverySession = issueOwnerRecoverySession();
+      if (!recoverySession) return send(response, 404, { error: 'Not found' });
+      clearAuthThrottle(throttleKey);
+      return send(response, 200, { ok: true }, {
+        'set-cookie': ownerRecoveryCookie(recoverySession, 300),
+        'referrer-policy': 'no-referrer',
+        'x-robots-tag': 'noindex, nofollow, noarchive'
+      });
+    }
     if (method === 'POST' && path === '/api/auth/admin-recovery') {
       // This is an emergency, deliberately non-email recovery path for a
       // permanent academy owner. It is disabled until an operator sets a
       // unique, server-only token in the hosting environment.
       if (!adminRecoveryEnabled()) return send(response, 404, { error: 'Not found' });
-      const input = await body(request), email = String(input.email || '').trim().toLowerCase(), token = String(input.token || ''), password = String(input.password || ''), passwordConfirmation = String(input.passwordConfirmation || '');
-      const usedTokenHash = createHash('sha256').update(token).digest('hex');
+      const input = await body(request), password = String(input.password || ''), passwordConfirmation = String(input.passwordConfirmation || '');
+      const cookieSession = readOwnerRecoverySession(request);
+      const cookieSessionMatches = Boolean(cookieSession && cookieSession.email === adminRecoveryEmail && cookieSession.recoveryHash === adminRecoveryTokenHash);
+      const usedTokenHash = cookieSessionMatches ? adminRecoveryTokenHash : 'missing-owner-recovery-session';
       // Rate-limit by the secret instead of a public owner email, so a random
       // visitor cannot lock an academy owner out of the emergency flow.
       const throttleKey = enforceAuthThrottle(request, 'admin-recovery', usedTokenHash, 5);
-      if (email !== adminRecoveryEmail || password.length < 12 || password !== passwordConfirmation || !matchesAdminRecoveryToken(token)) return send(response, 400, { error: 'The recovery details are invalid or have expired.' });
+      if (!isSamePublicOrigin(request) || password.length < 12 || password !== passwordConfirmation || !cookieSessionMatches) return send(response, 400, { error: 'The recovery details are invalid or have expired.' });
       const recovered = await updateState(state => {
         if (!Array.isArray(state.adminRecoveryUses)) state.adminRecoveryUses = [];
         if (state.adminRecoveryUses.some(item => item.tokenHash === usedTokenHash)) throw Object.assign(new Error('The recovery details are invalid or have expired.'), { status: 410 });
-        const user = state.users.find(item => String(item.email || '').toLowerCase() === email && item.role === 'admin');
+        const user = state.users.find(item => String(item.email || '').toLowerCase() === adminRecoveryEmail && item.role === 'admin');
         if (!user) throw Object.assign(new Error('The recovery details are invalid or have expired.'), { status: 400 });
         user.passwordHash = hashPassword(password);
         user.requiresPasswordSetup = false;
@@ -1692,12 +1740,12 @@ const server = createServer(async (request, response) => {
         delete user.inviteExpiresAt;
         user.passwordUpdatedAt = now();
         user.sessionVersion = sessionVersion(user) + 1;
-        state.adminRecoveryUses.push({ id: uid('admin-recovery'), tokenHash: usedTokenHash, ownerEmail: email, expiresAt: new Date(adminRecoveryExpiresAt).toISOString(), usedAt: now() });
-        state.audit.push({ id: uid('audit'), at: now(), action: 'owner.password-recovered', staffId: user.id, ownerEmail: email });
+        state.adminRecoveryUses.push({ id: uid('admin-recovery'), tokenHash: usedTokenHash, ownerEmail: adminRecoveryEmail, expiresAt: new Date(adminRecoveryExpiresAt).toISOString(), usedAt: now() });
+        state.audit.push({ id: uid('audit'), at: now(), action: 'owner.password-recovered', staffId: user.id, ownerEmail: adminRecoveryEmail });
         return user;
       });
       clearAuthThrottle(throttleKey);
-      return send(response, 200, { ok: true, user: publicUser(recovered) });
+      return send(response, 200, { ok: true, user: publicUser(recovered) }, { 'set-cookie': ownerRecoveryCookie() });
     }
     if (method === 'GET' && path === '/api/auth/me') { const state = await readState(), session = await readCurrentSession(request, state); if (!session) return send(response, 401, { error: 'Sign-in is required.' }); const user = state.users.find(item => item.id === session.sub); if (!user || !studentEmailIsVerified(user)) return send(response, 401, { error: 'Sign-in is required.' }); const student = user.studentId ? state.students.find(item => item.id === user.studentId) : null; return send(response, 200, { user: publicUser(user), profile: student ? publicStudent(student, state) : null }); }
     if (method === 'POST' && path === '/api/enquiries') {

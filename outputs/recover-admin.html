@@ -17,17 +17,13 @@
   <main class="card">
     <div class="eyebrow">OWNER ACCOUNT RECOVERY</div>
     <h1>Set a new admin password</h1>
-    <p>This page works only with a one-time recovery key created in the academy's secure server settings. It is for the two protected academy owner accounts only.</p>
+    <p>This page works only when opened from a secure one-time recovery link. It is for the two protected academy owner accounts only.</p>
     <form id="recoveryForm">
-      <label for="email">Owner email</label>
-      <input id="email" type="email" autocomplete="username" required>
-      <label for="token">One-time recovery key</label>
-      <div class="password"><input id="token" type="password" autocomplete="off" required><button type="button" data-toggle="token" aria-label="Show recovery key">Show</button></div>
       <label for="password">New password</label>
       <div class="password"><input id="password" type="password" minlength="12" autocomplete="new-password" required><button type="button" data-toggle="password" aria-label="Show new password">Show</button></div>
       <label for="confirmation">Confirm new password</label>
       <div class="password"><input id="confirmation" type="password" minlength="12" autocomplete="new-password" required><button type="button" data-toggle="confirmation" aria-label="Show confirmed password">Show</button></div>
-      <div class="notice"><b>Keep this private</b>Never share the recovery key or your new password with anyone. The key becomes unusable after one successful reset.</div>
+      <div class="notice"><b>Keep this private</b>A secure recovery link keeps its one-time credential hidden. This recovery session expires within five minutes and becomes unusable after one successful reset.</div>
       <button class="submit" id="submit">Reset owner password</button>
     </form>
     <p class="status" id="status" role="status" aria-live="polite"></p>
@@ -39,11 +35,22 @@
     // fragment. Fragments are not sent to the server; remove it immediately
     // after transferring the value to this masked field so it cannot linger
     // in the visible address or browser history.
-    const handoff=new URLSearchParams(location.hash.replace(/^#/,'')),handoffKey=handoff.get('recovery'),handoffOwner=handoff.get('owner');
-    if(/^(?:[A-Za-z0-9_-]{43}|[a-f0-9]{64})$/i.test(handoffKey||'')){byId('token').value=handoffKey;if(/^\S+@\S+\.\S+$/.test(handoffOwner||''))byId('email').value=handoffOwner;history.replaceState(null,'',location.pathname+location.search)}
+    const handoff=new URLSearchParams(location.hash.replace(/^#/,'')),handoffKey=handoff.get('recovery');
+    if(location.hash)history.replaceState(null,'',location.pathname+location.search);
+    if(/^(?:[A-Za-z0-9_-]{43}|[a-f0-9]{64})$/i.test(handoffKey||'')){
+      // The fragment is never sent to the server. Exchange it once in a
+      // same-origin POST body for a five-minute HttpOnly recovery cookie,
+      // then immediately remove it from the visible address and history.
+      submit.disabled=true;
+      fetch('/api/auth/admin-recovery/session',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token:handoffKey})})
+        .then(response=>{if(!response.ok)throw new Error('This secure recovery link is invalid or has expired.');return response.json()})
+        .then(()=>{status.className='status ok';status.textContent='Secure recovery link verified. Choose your new password.'})
+        .catch(error=>{status.className='status';status.textContent=error.message})
+        .finally(()=>{submit.disabled=false});
+    }
     document.querySelectorAll('[data-toggle]').forEach(button=>button.addEventListener('click',()=>{const input=byId(button.dataset.toggle),visible=input.type==='text';input.type=visible?'password':'text';button.textContent=visible?'Show':'Hide';button.setAttribute('aria-label',visible?`Show ${input.labels?.[0]?.textContent?.toLowerCase()||'value'}`:`Hide ${input.labels?.[0]?.textContent?.toLowerCase()||'value'}`)}));
-    form.addEventListener('submit',async event=>{event.preventDefault();const email=byId('email').value.trim(),token=byId('token').value,password=byId('password').value,passwordConfirmation=byId('confirmation').value;if(password!==passwordConfirmation){status.className='status';status.textContent='The new passwords do not match.';return}submit.disabled=true;status.className='status';status.textContent='Resetting securely…';try{const response=await fetch('/api/auth/admin-recovery',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,token,password,passwordConfirmation})}),data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'The recovery details are invalid or have expired.');form.reset();status.className='status ok';status.textContent='Password reset. Redirecting to sign in…';setTimeout(()=>location.assign('/login'),900)}catch(error){status.className='status';status.textContent=error.message}finally{submit.disabled=false}});
-    window.addEventListener('pagehide',()=>{byId('token').value='';byId('password').value='';byId('confirmation').value=''});
+    form.addEventListener('submit',async event=>{event.preventDefault();const password=byId('password').value,passwordConfirmation=byId('confirmation').value;if(password!==passwordConfirmation){status.className='status';status.textContent='The new passwords do not match.';return}submit.disabled=true;status.className='status';status.textContent='Resetting securely…';try{const response=await fetch('/api/auth/admin-recovery',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({password,passwordConfirmation})}),data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'The recovery details are invalid or have expired.');form.reset();status.className='status ok';status.textContent='Password reset. Redirecting to sign in…';setTimeout(()=>location.assign('/login'),900)}catch(error){status.className='status';status.textContent=error.message}finally{submit.disabled=false}});
+    window.addEventListener('pagehide',()=>{byId('password').value='';byId('confirmation').value=''});
   </script>
 </body>
 </html>
