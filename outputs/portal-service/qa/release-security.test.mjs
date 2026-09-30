@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +44,10 @@ assert.match(serverSource, /const requestedPage = requested;[\s\S]*protectedDesk
 assert.match(serverSource, /async function performSync\(studentId, jobId\) \{[\s\S]*?if \(isProduction && !productionWritesReady\) return;/, 'sync workers must not run against an unsafe production store');
 assert.match(serverSource, /async function queueSync\(studentId, trigger = 'manual'\) \{[\s\S]*?if \(isProduction && !productionWritesReady\)/, 'sync jobs must not be written when production durability is unavailable');
 assert.match(serverSource, /if \(process\.env\.NIOS_SYNC_MODE === 'official' && \(!isProduction \|\| productionWritesReady\)\) setInterval\(async \(\) => \{\s*if \(isProduction && !productionWritesReady\) return;/, 'the official-sync scheduler must stay idle until production durability is ready');
+assert.match(serverSource, /ADMIN_ACCOUNT_RECOVERY_EMAIL/, 'owner recovery must be bound to a configured owner email');
+assert.match(serverSource, /adminRecoveryExpiresAt > Date\.now\(\) && adminRecoveryExpiresAt <= Date\.now\(\) \+ maxRecoveryLifetimeMs/, 'owner recovery must be short-lived');
+assert.match(serverSource, /stateOnlyOwnerRecovery = path === '\/api\/auth\/admin-recovery' && stateStore\.durable/, 'owner recovery must require durable state even if document storage is unavailable');
+assert.match(serverSource, /user\.sessionVersion = sessionVersion\(user\) \+ 1;/, 'password changes must invalidate existing sessions');
 
 const environment = {
   ...process.env,
@@ -89,6 +93,14 @@ try {
     assert.equal(response.status, 302, `${path} should preserve its useful public destination`);
     assert.equal(response.headers.get('location'), target);
   }
+
+  const recoveryPage = await page('/recover-admin');
+  assert.equal(recoveryPage.response.status, 200);
+  assert.match(recoveryPage.body, /OWNER ACCOUNT RECOVERY/);
+  assert.match(String(recoveryPage.response.headers.get('cache-control')), /private, no-store/, 'the recovery form must never be shared from a cache');
+  assert.match(String(recoveryPage.response.headers.get('x-robots-tag')), /noindex/i, 'the recovery form must not be indexed');
+  const disabledRecovery = await api('/api/auth/admin-recovery', { method: 'POST', body: { email: 'niosbest.tvl@gmail.com', token: 'x'.repeat(43), password: 'owner-recovery-password', passwordConfirmation: 'owner-recovery-password' } });
+  assert.equal(disabledRecovery.response.status, 404, 'owner recovery stays invisible until an explicit production break-glass credential exists');
 
   // Exercise extensionless versions of every private route family. The server
   // must authenticate the resolved .html target, not only the raw request.
@@ -158,6 +170,15 @@ try {
   assert.equal(readiness.response.status, 200);
   assert.deepEqual(Object.keys(readiness.data.readiness.zoom).sort(), ['missing', 'ready']);
   assert.equal(typeof readiness.data.readiness.email.ready, 'boolean');
+  const statePath = join(stateDirectory, 'state.json');
+  const stateAfterAdminLogin = JSON.parse(await readFile(statePath, 'utf8'));
+  const admin = stateAfterAdminLogin.users.find(user => user.email === 'admin@niosbest.in');
+  admin.sessionVersion = 1;
+  await writeFile(statePath, JSON.stringify(stateAfterAdminLogin), 'utf8');
+  const staleAdmin = await api('/api/admin/health', { cookie: adminLogin.cookie });
+  assert.equal(staleAdmin.response.status, 401, 'a session issued before an owner password reset or role change must be rejected');
+  const staleAdminPage = await page('/admin-batches', adminLogin.cookie);
+  assert.match(staleAdminPage.body, /id="loginForm"/, 'stale sessions must not reveal static admin pages');
 
   console.log('release-security.test.mjs: security, private-context, and counselor-route assertions passed');
 } finally {

@@ -36,9 +36,9 @@ const checkout=(order,keyId)=>({id:order.id,provider:order.provider,amount:order
 export async function resourceStore(request,response,url,ctx) {
   const path=url.pathname, method=request.method;
   if(!path.startsWith('/api/store/'))return false;
-  const {readState,updateState,readSession,requireAdmin,body,send,storage,filePayload,uid,isProduction}=ctx;
+  const {readState,updateState,readCurrentSession,requireAdmin,body,send,storage,filePayload,uid,isProduction}=ctx;
   const state=await readState(), products=state.storeFiles||{}, orders=state.resourceOrders||[];
-  const session=readSession(request);
+  const session=await readCurrentSession(request,state);
   const user=()=>{if(!session)fail(401,'Sign in to purchase this PDF.');return session.sub};
   const owned=id=>orders.some(o=>o.userId===session?.sub&&o.productId===id&&o.status==='CAPTURED');
   const product=id=>catalogue.find(p=>p.id===id)||fail(404,'Resource not found.');
@@ -47,7 +47,7 @@ export async function resourceStore(request,response,url,ctx) {
   }
   const upload=path.match(/^\/api\/store\/files\/([^/]+)$/);
   if(method==='PUT'&&upload){
-    requireAdmin(request);const p=product(upload[1]),file=filePayload(await body(request));
+    await requireAdmin(request,state);const p=product(upload[1]),file=filePayload(await body(request));
     if(file.mimeType!=='application/pdf'||file.bytes.subarray(0,5).toString()!=='%PDF-')fail(422,'Upload a genuine PDF file.');
     const key='store/'+p.id+'/'+uid('pdf')+'.pdf';await storage.put(key,file.bytes,'application/pdf');
     await updateState(s=>{s.storeFiles??={};s.storeFiles[p.id]={key,fileName:file.fileName};s.audit.push({id:uid('audit'),action:'store.pdf-uploaded',productId:p.id,at:new Date().toISOString()})});
