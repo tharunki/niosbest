@@ -512,9 +512,13 @@ async function removeSection(id) {
   }
 }
 
+function displayPdfFilename(file) {
+  return String(file || '').replace(/^(?:bulk|upload)-[0-9a-f]{32}-(.+\.pdf)$/i, '$1');
+}
+
 function renderFiles(files = [], emptyMessage = 'No protected PDFs have been uploaded yet.') {
   fileList.innerHTML = files.length
-    ? files.map(file => `<div class="pdf-file"><span>${escapeHTML(file)}</span><button class="remove delete-file" type="button" data-file="${escapeHTML(file)}">Remove</button></div>`).join('')
+    ? files.map(file => `<div class="pdf-file"><span>${escapeHTML(displayPdfFilename(file))}</span><button class="remove delete-file" type="button" data-file="${escapeHTML(file)}" aria-label="Remove ${escapeHTML(displayPdfFilename(file))}">Remove</button></div>`).join('')
     : `<p class="notice">${escapeHTML(emptyMessage)}</p>`;
   $$('.delete-file', fileList).forEach(button => button.addEventListener('click', () => removePdf(button.dataset.file)));
 }
@@ -536,7 +540,7 @@ async function loadFiles(selected = value('fileKey')) {
     uploadInput.disabled = false;
     uploadButton.disabled = false;
     uploadName.textContent = 'Maximum file size: 25 MB.';
-    select.innerHTML = `<option value="">Not ready for sale yet</option>${files.map(file => `<option value="${escapeHTML(file)}">${escapeHTML(file)}</option>`).join('')}`;
+    select.innerHTML = `<option value="">Not ready for sale yet</option>${files.map(file => `<option value="${escapeHTML(file)}">${escapeHTML(displayPdfFilename(file))}</option>`).join('')}`;
     if ([...select.options].some(option => option.value === selected)) select.value = selected;
     renderFiles(files);
   } catch (error) {
@@ -1655,7 +1659,7 @@ uploadButton.addEventListener('click', async () => {
 });
 
 async function removePdf(filename) {
-  if (!confirm(`Remove ${filename}? This cannot be undone.`)) return;
+  if (!confirm(`Remove ${displayPdfFilename(filename)}? This cannot be undone.`)) return;
   try {
     await request(`/api/admin/files/${encodeURIComponent(filename)}`, { method: 'DELETE' });
     await loadFiles('');

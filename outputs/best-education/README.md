@@ -2,7 +2,7 @@
 
 TK's SOLUTION sells protected study PDFs for Class 10–12, JEE, NEET and future learning collections. It includes a secure admin area, a shared catalogue, Razorpay checkout, private time-limited downloads, and an automatically generated sitemap.
 
-The recommended live deployment is the **Cloudflare free tier**: static pages are served from Cloudflare's edge, the shared catalogue and orders live in D1, and PDFs are stored in a private R2 bucket. The legacy Node/Render server is retained only for local development and is **not approved for live paid sales**.
+The recommended live deployment uses **Cloudflare Workers + D1** for the site, catalogue and orders, with private PDF storage in **Supabase Storage**. The Worker is the only component allowed to contact Supabase; students receive PDFs only through the protected download route. The legacy Node/Render server is retained only for local development and is **not approved for live paid sales**.
 
 ## Run locally
 
@@ -29,34 +29,36 @@ Uploaded PDFs are never served as public static files. They are released only af
 
 ## Cloudflare deployment (recommended)
 
-This is the version to use for a low-cost launch. The Worker source is in `cloudflare/worker.mjs`; apply every migration in `cloudflare/migrations/` in order. The deployed site must use the contents of `build/` as Cloudflare static assets. Do **not** make the R2 bucket public and do not enable an `r2.dev` public URL for the PDF bucket.
+This is the version to use for a low-cost launch. The Worker source is in `cloudflare/worker.mjs`; apply every migration in `cloudflare/migrations/` in order. The deployed site must use the contents of `build/` as Cloudflare static assets. The PDF bucket is named `tks-papers` and must remain **private**: do not add a public Storage policy, a public bucket URL, or direct PDF links to the website.
 
 1. Install a normal Node.js LTS distribution that includes `npm` and `npx` (the portable Node runtime bundled with some desktop tools does not include them).
 2. Sign in to Cloudflare in a terminal with `npx wrangler login`.
-3. From this folder, create the private storage resources:
+3. From this folder, create the database:
 
    ```powershell
    npx wrangler d1 create best-education-db
-   npx wrangler r2 bucket create best-education-papers
    ```
 
-4. Copy the D1 `database_id` printed by the first command into `wrangler.jsonc`. Do not add passwords, payment keys, PDFs or database files to Git.
-5. Create the schema and production secrets:
+4. Copy the D1 `database_id` printed by that command into `wrangler.jsonc`. Do not add passwords, payment keys, PDFs or database files to Git.
+5. Create a Supabase project, then use its **Project URL** and server-side **Secret key** (the current key starts with `sb_secret_`). Do not use the anonymous/publishable key. Put both values into Cloudflare Worker secrets; never put the secret key in browser code, a static file, or Git.
+6. Create the schema and server-only Worker secrets:
 
    ```powershell
    npx wrangler d1 migrations apply best-education-db --remote
    npx wrangler secret put ADMIN_PASSWORD
    npx wrangler secret put DOWNLOAD_TOKEN_SECRET
+   npx wrangler secret put SUPABASE_URL
+   npx wrangler secret put SUPABASE_SECRET_KEY
    npx wrangler secret put RAZORPAY_KEY_ID
    npx wrangler secret put RAZORPAY_KEY_SECRET
    npx wrangler secret put RAZORPAY_WEBHOOK_SECRET
    npx wrangler secret put PAYMENTS_ENABLED
    ```
 
-   Use a unique admin password of at least 12 characters and a separate random download secret of at least 32 characters. Start with Razorpay **Test** keys. Enter `false` for `PAYMENTS_ENABLED` while setting up the site: PDFs stay visible as “coming soon” and cannot be bought until this deliberate sales switch is changed to `true`.
+   Use a unique admin password of at least 12 characters and a separate random download secret of at least 32 characters. Enter the Supabase Project URL for `SUPABASE_URL` and the Supabase Secret key for `SUPABASE_SECRET_KEY`. The Worker creates and verifies the private `tks-papers` bucket when an authenticated admin first opens the PDF library, restricting it to PDFs up to 25 MB. If you create it manually, keep it private; the Worker repairs the PDF/size restriction before an upload. Start with Razorpay **Test** keys. Enter `false` for `PAYMENTS_ENABLED` while setting up the site: PDFs stay visible as “coming soon” and cannot be bought until this deliberate sales switch is changed to `true`.
 
-6. Deploy with `npx wrangler deploy`. Test the temporary `workers.dev` address first. It is deliberately marked `noindex`, so it will not compete with the final site in search results.
-7. After testing the admin upload, a test purchase, a verified download, and the Razorpay webhook, attach the final custom domain and replace test Razorpay credentials with Live credentials. Set the webhook endpoint to:
+7. Deploy with `npx wrangler deploy`. Test the temporary `workers.dev` address first. It is deliberately marked `noindex`, so it will not compete with the final site in search results.
+8. After testing the admin upload, a test purchase, a verified download, and the Razorpay webhook, attach the final custom domain and replace test Razorpay credentials with Live credentials. Set the webhook endpoint to:
 
    ```text
    https://YOUR-FINAL-DOMAIN/api/payment/webhook
@@ -64,17 +66,13 @@ This is the version to use for a low-cost launch. The Worker source is in `cloud
 
    Subscribe Razorpay to `payment.captured` and `payment.failed`. Test one final purchase and download with the Live configuration, then set `PAYMENTS_ENABLED` to `true` **last**. This switch controls the public buy buttons, product indexing and checkout, so leaving it absent or `false` keeps sales safely closed.
 
-The Workers, D1 and R2 included free allowances are generous for a new study-material site, but R2 is usage-billed after its free allowance and Cloudflare may require a billing profile/card even when monthly usage remains ₹0. Add a Cloudflare budget alert before opening sales. The free Worker upload route is suitable for the current chapter PDFs; upload very large bundle PDFs only after testing because Workers Free has a small CPU limit.
+Cloudflare Workers/D1 and Supabase Free are suitable for a small launch, but their allowances and inactivity rules can change. Monitor the two dashboards, keep source PDFs under the 25 MB upload limit, and plan an upgrade before heavy download traffic. The free Worker upload route is suitable for the current chapter PDFs; test large bundle PDFs before publishing them.
 
-### Catalogue-only preview while R2 is pending
+### Safe setup state
 
-If the R2 activation page is still awaiting a billing profile, do **not** attach public PDF links or Razorpay credentials as a workaround. The project includes a safe temporary launch command instead:
+Before both Supabase Worker secrets are set, the catalogue and protected admin area can still be deployed and checked. PDF upload, paid checkout, and downloads deliberately show an unavailable message. This is intentional: do **not** work around it by publishing storage URLs, making the bucket public, or adding direct PDF links.
 
-```powershell
-pnpm run cloudflare:catalog-preview
-```
-
-It deploys the shared catalogue, search, and protected admin area to the same `workers.dev` address without an R2 binding. Students can browse the library, while the admin can create sections and draft cards. PDF upload, paid checkout, and downloads deliberately show a clear unavailable message until private R2 storage is enabled. After activating R2, deploy the normal configuration with `pnpm run cloudflare:deploy`; it attaches the private `PAPERS` bucket without changing the public Worker URL. Because this preview uses the same Worker name, do not run the catalogue-preview command after R2 is live unless you deliberately want to disable the R2 binding and all purchases.
+The Worker streams each purchased PDF from the private bucket only after it rechecks the signed download, order, refund/revocation, and expiry rules. A student never receives a permanent Supabase URL.
 
 ## Legacy Node / Render fallback
 

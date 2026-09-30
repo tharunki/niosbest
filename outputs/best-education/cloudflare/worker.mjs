@@ -14,6 +14,7 @@ const MAX_BULK_UPLOAD_BYTES = 90 * 1024 * 1024;
 const MAX_BULK_PDF_FILES = 10;
 const MAX_BULK_METADATA_BYTES = 1_000_000;
 const RAZORPAY_TIMEOUT_MS = 8_000;
+const SUPABASE_TIMEOUT_MS = 10_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const IST_TIME_ZONE = 'Asia/Kolkata';
 const ANALYTICS_VISITOR_RETENTION_DAYS = 35;
@@ -38,6 +39,7 @@ const PROMOTION_KINDS = new Set(['discount', 'bundle', 'subscription']);
 const PROMOTION_DISCOUNT_TYPES = new Set(['percent', 'fixed']);
 const PROMOTION_INTERVALS = new Set(['none', 'monthly', 'yearly']);
 const PAPER_STORAGE_UNAVAILABLE = 'Secure PDF storage is not configured yet. PDF uploads, purchases, and downloads are temporarily unavailable.';
+const SUPABASE_PAPER_BUCKET = 'tks-papers';
 
 const scienceLessons = [
   'Chemical Reactions and Equations', 'Acids, Bases and Salts', 'Metals and Non-metals',
@@ -116,9 +118,10 @@ class UpstreamServiceError extends Error {
   }
 }
 
-// `PAPERS` is an optional R2 binding while the site is being set up. Do not
-// let an absent binding turn otherwise healthy catalogue/admin pages into 500s.
-function hasPaperStorage(env) {
+// Keep the original R2 adapter readable for any already-configured preview,
+// while production uses the private Supabase adapter below. Both providers stay
+// behind these server-only helpers: browser code never receives a storage key.
+function hasR2PaperStorage(env) {
   const papers = env?.PAPERS;
   return Boolean(papers
     && typeof papers.head === 'function'
@@ -128,9 +131,56 @@ function hasPaperStorage(env) {
     && typeof papers.list === 'function');
 }
 
+function supabaseProjectUrl(env) {
+  const value = String(env?.SUPABASE_URL || '').trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' || url.username || url.password || url.port || !/^[a-z0-9-]+\.supabase\.co$/i.test(url.hostname)) return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function supabaseServerKey(env) {
+  // Supabase's current dashboard calls this a secret key (`sb_secret_...`).
+  // Keep the legacy service-role name as a temporary migration fallback only.
+  return String(env?.SUPABASE_SECRET_KEY || env?.SUPABASE_SERVICE_ROLE_KEY || '').trim();
+}
+
+function hasSupabasePaperStorage(env) {
+  return Boolean(supabaseProjectUrl(env) && hasConfiguredSecret(supabaseServerKey(env), 32));
+}
+
+function hasPaperStorage(env) {
+  return hasR2PaperStorage(env) || hasSupabasePaperStorage(env);
+}
+
 function requirePaperStorage(env) {
   if (!hasPaperStorage(env)) throw new PaperStorageUnavailableError();
-  return env.PAPERS;
+  return env;
+}
+
+// Public traffic must fail closed if someone changes the managed bucket in the
+// Supabase dashboard. This check intentionally runs before every storage
+// operation, including checkout existence checks and protected downloads; a
+// private-object URL is never a substitute for the application's own access
+// controls.
+function newStorageOperationContext() {
+  // This object is created only inside one authenticated request. It avoids
+  // repeating the same bucket lookup for every file in an admin bulk upload;
+  // public checkout and download requests deliberately do not receive it.
+  return { supabaseReady: false, uploadedFileKeys: new Set() };
+}
+
+async function requireReadyPaperStorage(env, storageContext = null) {
+  requirePaperStorage(env);
+  if (hasSupabasePaperStorage(env) && !hasR2PaperStorage(env) && !storageContext?.supabaseReady) {
+    await ensureSupabasePaperBucket(env);
+    if (storageContext) storageContext.supabaseReady = true;
+  }
+  return env;
 }
 
 function paperStorageUnavailableResponse() {
@@ -139,6 +189,166 @@ function paperStorageUnavailableResponse() {
 
 function hasConfiguredSecret(value, minimumLength = 1) {
   return typeof value === 'string' && value.trim().length >= minimumLength;
+}
+
+function supabaseStoragePath(filename = '') {
+  return `${encodeURIComponent(SUPABASE_PAPER_BUCKET)}/${encodeURIComponent(filename)}`;
+}
+
+function supabaseStorageUrl(env, path = '') {
+  const projectUrl = supabaseProjectUrl(env);
+  if (!projectUrl) throw new PaperStorageUnavailableError();
+  return `${projectUrl}/storage/v1${path}`;
+}
+
+function supabaseStorageHeaders(env, headers = {}) {
+  const key = supabaseServerKey(env);
+  // Current sb_secret keys are opaque API keys, not JWTs. Supabase requires
+  // those on `apikey` only. The Authorization fallback exists solely for an
+  // older JWT-shaped service_role key during a controlled migration.
+  return {
+    ...headers,
+    apikey: key,
+    'X-Client-Info': 'tks-solution-worker/1.0',
+    ...(key.startsWith('sb_secret_') ? {} : { Authorization: `Bearer ${key}` })
+  };
+}
+
+async function supabaseStorageFetch(env, path, init = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SUPABASE_TIMEOUT_MS);
+  try {
+    return await fetch(supabaseStorageUrl(env, path), {
+      ...init,
+      signal: controller.signal,
+      headers: supabaseStorageHeaders(env, init.headers || {})
+    });
+  } catch {
+    throw new UpstreamServiceError('The private PDF storage service could not be reached. Please try again shortly.');
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function storageResponseError(response, fallback) {
+  // Storage responses may contain internal implementation detail. Keep that
+  // out of public/admin API errors while still providing a useful action.
+  try { await response.body?.cancel(); } catch { /* response cleanup is best effort */ }
+  throw new UpstreamServiceError(fallback);
+}
+
+async function isMissingSupabaseObject(response) {
+  if (response.status === 404) {
+    try { await response.body?.cancel(); } catch { /* best-effort cleanup */ }
+    return true;
+  }
+  if (response.status !== 400) return false;
+  // Supabase Storage uses a 400 response with `NoSuchKey` for a missing
+  // private object on some renderer routes. Do not treat any other 400 as a
+  // missing PDF: configuration and credential failures need a clear error.
+  const payload = await response.clone().json().catch(() => null);
+  const missing = payload?.code === 'NoSuchKey';
+  if (missing) {
+    try { await response.body?.cancel(); } catch { /* best-effort cleanup */ }
+  }
+  return missing;
+}
+
+async function ensureSupabasePaperBucket(env) {
+  if (!hasSupabasePaperStorage(env)) throw new PaperStorageUnavailableError();
+  const bucketPath = `/bucket/${encodeURIComponent(SUPABASE_PAPER_BUCKET)}`;
+  let response = await supabaseStorageFetch(env, bucketPath);
+  if (response.status === 404) {
+    response = await supabaseStorageFetch(env, '/bucket', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: SUPABASE_PAPER_BUCKET,
+        name: SUPABASE_PAPER_BUCKET,
+        public: false,
+        file_size_limit: MAX_PDF_BYTES,
+        allowed_mime_types: ['application/pdf']
+      })
+    });
+    if (!response.ok && response.status !== 409) await storageResponseError(response, 'The private PDF storage bucket could not be prepared. Please check the Supabase connection.');
+    response = await supabaseStorageFetch(env, bucketPath);
+  }
+  if (!response.ok) await storageResponseError(response, 'The private PDF storage bucket is unavailable. Please check the Supabase connection.');
+  const bucket = await response.json().catch(() => null);
+  if (!bucket || bucket.public !== false) {
+    throw new UpstreamServiceError('The PDF storage bucket must remain private. Change the Supabase bucket to private before uploading or selling PDFs.');
+  }
+  const allowedMimeTypes = Array.isArray(bucket.allowed_mime_types) ? bucket.allowed_mime_types : [];
+  if (Number(bucket.file_size_limit) !== MAX_PDF_BYTES || allowedMimeTypes.length !== 1 || allowedMimeTypes[0] !== 'application/pdf') {
+    const update = await supabaseStorageFetch(env, bucketPath, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_size_limit: MAX_PDF_BYTES, allowed_mime_types: ['application/pdf'] })
+    });
+    if (!update.ok) await storageResponseError(update, 'The private PDF storage bucket must allow only PDFs up to 25 MB. Please check the Supabase connection.');
+  }
+}
+
+async function paperExists(env, filename, storageContext = null) {
+  await requireReadyPaperStorage(env, storageContext);
+  if (hasR2PaperStorage(env)) return Boolean(await env.PAPERS.head(filename));
+  // Object-info is a tiny metadata response with a structured NoSuchKey
+  // error. It is safer than interpreting a bodyless HEAD 400 as missing.
+  const response = await supabaseStorageFetch(env, `/object/info/authenticated/${supabaseStoragePath(filename)}`);
+  if (await isMissingSupabaseObject(response)) return false;
+  if (!response.ok) await storageResponseError(response, 'The private PDF storage service could not check this file. Please try again shortly.');
+  try { await response.body?.cancel(); } catch { /* best-effort cleanup */ }
+  return true;
+}
+
+async function readPaper(env, filename, storageContext = null) {
+  await requireReadyPaperStorage(env, storageContext);
+  if (hasR2PaperStorage(env)) {
+    const object = await env.PAPERS.get(filename);
+    return object ? { body: object.body, size: object.size, writeHttpMetadata: (headers) => object.writeHttpMetadata(headers) } : null;
+  }
+  const response = await supabaseStorageFetch(env, `/object/authenticated/${supabaseStoragePath(filename)}`);
+  if (await isMissingSupabaseObject(response)) return null;
+  if (!response.ok || !response.body) await storageResponseError(response, 'The protected PDF file could not be read. Please try again shortly.');
+  const contentLength = response.headers.get('Content-Length');
+  const length = contentLength === null ? null : Number(contentLength);
+  return { body: response.body, size: Number.isSafeInteger(length) && length >= 0 ? length : null };
+}
+
+async function writePaper(env, filename, body, storageContext = null) {
+  await requireReadyPaperStorage(env, storageContext);
+  if (hasR2PaperStorage(env)) {
+    await env.PAPERS.put(filename, body, {
+      httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${filename}"` }
+    });
+    return;
+  }
+  const response = await supabaseStorageFetch(env, `/object/${supabaseStoragePath(filename)}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/pdf',
+      'Cache-Control': 'private, no-store',
+      // Storage keys are generated by the Worker and are immutable. Refuse a
+      // collision rather than permitting any accidental replacement.
+      'x-upsert': 'false'
+    },
+    body
+  });
+  if (!response.ok) await storageResponseError(response, 'The PDF could not be stored securely. Please try again shortly.');
+}
+
+async function removePaper(env, filename, storageContext = null) {
+  await requireReadyPaperStorage(env, storageContext);
+  if (hasR2PaperStorage(env)) {
+    await env.PAPERS.delete(filename);
+    return;
+  }
+  const response = await supabaseStorageFetch(env, `/object/${encodeURIComponent(SUPABASE_PAPER_BUCKET)}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prefixes: [filename] })
+  });
+  if (!response.ok) await storageResponseError(response, 'The PDF could not be removed from secure storage. Please try again shortly.');
 }
 
 // This is a deliberate launch switch rather than an inferred state. A bucket
@@ -881,31 +1091,47 @@ function safePdfFilename(value) {
 
 function downloadPdfFilename(storageKey) {
   const key = safePdfFilename(storageKey);
-  const generated = /^bulk-[0-9a-f]{32}-(.+\.pdf)$/i.exec(key);
+  const generated = /^(?:bulk|upload)-[0-9a-f]{32}-(.+\.pdf)$/i.exec(key);
   return generated ? safePdfFilename(generated[1]) : key;
 }
 
-function generatedBulkStorageKey(filename) {
+function generatedStorageKey(prefix, filename) {
   const source = safePdfFilename(filename);
   const extension = '.pdf';
   const base = source.slice(0, -extension.length);
-  const prefix = `bulk-${crypto.randomUUID().replace(/-/g, '')}-`;
-  const maximumBaseLength = 180 - prefix.length - extension.length;
-  return safePdfFilename(`${prefix}${base.slice(0, maximumBaseLength)}${extension}`);
+  const generatedPrefix = `${prefix}-${crypto.randomUUID().replace(/-/g, '')}-`;
+  const maximumBaseLength = 180 - generatedPrefix.length - extension.length;
+  return safePdfFilename(`${generatedPrefix}${base.slice(0, maximumBaseLength)}${extension}`);
 }
 
-async function newBulkStorageKey(env, filename) {
+function generatedBulkStorageKey(filename) {
+  return generatedStorageKey('bulk', filename);
+}
+
+function generatedUploadStorageKey(filename) {
+  return generatedStorageKey('upload', filename);
+}
+
+async function newBulkStorageKey(env, filename, storageContext = null) {
   // Each batch receives an immutable server-generated key. Besides avoiding
   // accidental overwrites, this makes failure cleanup safe even if two admins
   // upload files with the same display filename at the same time.
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const key = generatedBulkStorageKey(filename);
-    if (!await env.PAPERS.head(key)) return key;
+    if (!await paperExists(env, key, storageContext)) return key;
   }
   throw new Error('Could not reserve secure storage for this PDF. Please retry the batch.');
 }
 
-async function cleanCard(env, input, existing = null) {
+async function newUploadStorageKey(env, filename, storageContext = null) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const key = generatedUploadStorageKey(filename);
+    if (!await paperExists(env, key, storageContext)) return key;
+  }
+  throw new Error('Could not reserve secure storage for this PDF. Please retry the upload.');
+}
+
+async function cleanCard(env, input, existing = null, storageContext = null) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid card details.');
   const supplied = (field, fallback = '') => Object.prototype.hasOwnProperty.call(input, field) ? input[field] : fallback;
   const sectionId = optionalIdentifier(supplied('sectionId', existing?.sectionId || ''), 'Section');
@@ -939,7 +1165,9 @@ async function cleanCard(env, input, existing = null) {
   }
   if (fileKey) {
     fileKey = safePdfFilename(fileKey);
-    if (!await requirePaperStorage(env).head(fileKey)) throw new Error('Upload the selected PDF before linking it to a card.');
+    if (!storageContext?.uploadedFileKeys?.has(fileKey) && !await paperExists(env, fileKey, storageContext)) {
+      throw new Error('Upload the selected PDF before linking it to a card.');
+    }
   }
   const id = existing?.id || crypto.randomUUID();
   const desiredSlug = String(input.slug || '').trim() || existing?.slug || `${type}-class-${className}-${subject}-${title}`;
@@ -1319,13 +1547,18 @@ async function secureDownload(request, env, token) {
       return json({ error: 'Access to this purchase is no longer available.' }, 403);
     }
   }
-  const object = await env.PAPERS.get(filename);
+  let object;
+  try {
+    object = await readPaper(env, filename);
+  } catch (error) {
+    return apiErrorResponse(error, 'The protected PDF file could not be read. Please try again shortly.');
+  }
   if (!object) return json({ error: 'The protected PDF file was not found.' }, 404);
   const headers = new Headers(securityHeaders('application/pdf'));
-  object.writeHttpMetadata(headers);
+  object.writeHttpMetadata?.(headers);
   headers.set('Content-Disposition', `attachment; filename="${downloadPdfFilename(filename)}"`);
   headers.set('Cache-Control', 'private, no-store');
-  headers.set('Content-Length', String(object.size));
+  if (Number.isSafeInteger(object.size) && object.size >= 0) headers.set('Content-Length', String(object.size));
   return new Response(object.body, { status: 200, headers });
 }
 
@@ -2098,7 +2331,25 @@ function clearRecoveryCookie(orderId, secure) {
 }
 
 async function listPdfFiles(env) {
-  const papers = requirePaperStorage(env);
+  await requireReadyPaperStorage(env);
+  if (hasSupabasePaperStorage(env) && !hasR2PaperStorage(env)) {
+    const files = [];
+    const limit = 1000;
+    for (let offset = 0; offset < 20_000; offset += limit) {
+      const response = await supabaseStorageFetch(env, `/object/list/${encodeURIComponent(SUPABASE_PAPER_BUCKET)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prefix: '', limit, offset, sortBy: { column: 'name', order: 'asc' } })
+      });
+      if (!response.ok) await storageResponseError(response, 'The private PDF library could not be listed. Please check the Supabase connection.');
+      const page = await response.json().catch(() => null);
+      if (!Array.isArray(page)) throw new UpstreamServiceError('The private PDF library returned an invalid response. Please try again shortly.');
+      files.push(...page.map((object) => String(object?.name || '')).filter((name) => /\.pdf$/i.test(name)));
+      if (page.length < limit) break;
+    }
+    return [...new Set(files)].sort((left, right) => left.localeCompare(right));
+  }
+  const papers = env.PAPERS;
   const files = [];
   let cursor;
   do {
@@ -2236,13 +2487,15 @@ async function bulkUpload(env, request) {
   if (files.length > MAX_BULK_PDF_FILES) throw new Error(`Upload no more than ${MAX_BULK_PDF_FILES} PDFs at a time.`);
   const metadata = await bulkMetadata(formData);
   if (!metadata.length || metadata.length > MAX_BULK_PDF_FILES) throw new Error(`Bulk metadata must contain 1–${MAX_BULK_PDF_FILES} cards.`);
+  const storageContext = newStorageOperationContext();
+  await requireReadyPaperStorage(env, storageContext);
   const fileByName = new Map();
   for (const file of files) {
     const filename = safePdfFilename(file.name);
     if (file.size < 5 || file.size > MAX_PDF_BYTES) throw new Error(`PDF ${filename} must be between 5 bytes and 25 MB.`);
     if (file.type && file.type !== 'application/pdf') throw new Error(`PDF ${filename} has an invalid file type.`);
     if (fileByName.has(filename)) throw new Error(`PDF ${filename} was added more than once.`);
-    fileByName.set(filename, { file, storageKey: await newBulkStorageKey(env, filename) });
+    fileByName.set(filename, { file, storageKey: await newBulkStorageKey(env, filename, storageContext) });
   }
   const cardInputs = metadata.map(bulkCardInput);
   const metadataFiles = new Set();
@@ -2258,18 +2511,17 @@ async function bulkUpload(env, request) {
   const uploaded = [];
   try {
     for (const { storageKey, file } of fileByName.values()) {
-      // Track it before awaiting R2: a failed streamed write may still have
+      // Track it before awaiting storage: a failed streamed write may still have
       // created an object. Keys are generated per batch, so cleanup can never
       // remove another upload that happened to use the same display filename.
       uploaded.push(storageKey);
-      await env.PAPERS.put(storageKey, pdfUploadStream(file.stream()), {
-        httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${storageKey}"` }
-      });
+      await writePaper(env, storageKey, pdfUploadStream(file.stream()), storageContext);
+      storageContext.uploadedFileKeys.add(storageKey);
     }
     const cards = [];
     const usedSlugs = new Set();
     for (const input of cardInputs) {
-      const card = await cleanCard(env, input);
+      const card = await cleanCard(env, input, null, storageContext);
       const base = card.slug;
       let candidate = base;
       let attempt = 2;
@@ -2283,7 +2535,7 @@ async function bulkUpload(env, request) {
   } catch (error) {
     // Each key is server-generated for this one batch, so cleanup can never
     // remove someone else's PDF when metadata or the D1 batch is rejected.
-    await Promise.all(uploaded.map((filename) => env.PAPERS.delete(filename).catch(() => {})));
+    await Promise.all(uploaded.map((filename) => removePaper(env, filename, storageContext).catch(() => {})));
     throw error;
   }
 }
@@ -2552,7 +2804,13 @@ async function api(request, env, url) {
     try { buyer = cleanCheckoutBuyer(await readOptionalJson(request)); }
     catch (error) { return apiErrorResponse(error, 'Invalid checkout details.'); }
     const card = await getCardBySlug(env, checkoutMatch[1]);
-    if (!card?.fileKey || !cardIsPubliclyVisible(card) || !await env.PAPERS.head(card.fileKey)) return json({ error: 'This paper is not ready for secure purchase yet.' }, 404);
+    let fileReady = false;
+    try {
+      fileReady = Boolean(card?.fileKey && cardIsPubliclyVisible(card) && await paperExists(env, card.fileKey));
+    } catch (error) {
+      return apiErrorResponse(error, 'The protected PDF service is unavailable. Please try again shortly.');
+    }
+    if (!fileReady) return json({ error: 'This paper is not ready for secure purchase yet.' }, 404);
     if (!canAcceptNewPayments(env)) return paymentDeliveryUnavailableResponse(env);
     if (!await consumeRateLimit(request, env, 'checkout_attempts', CHECKOUT_WINDOW_MS, MAX_CHECKOUT_ATTEMPTS)) return json({ error: 'Too many checkout attempts from this connection. Please wait 10 minutes and try again.' }, 429);
     const receipt = `best_${crypto.randomUUID().replace(/-/g, '').slice(0, 30)}`;
@@ -2734,19 +2992,27 @@ async function api(request, env, url) {
   }
   if (request.method === 'GET' && url.pathname === '/api/admin/files') {
     if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
-    return json({ files: await listPdfFiles(env) });
+    try {
+      return json({ files: await listPdfFiles(env) });
+    } catch (error) {
+      return apiErrorResponse(error, 'The private PDF library could not be loaded.');
+    }
   }
   if (request.method === 'POST' && url.pathname === '/api/admin/files') {
     if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
     try {
       const contentType = String(request.headers.get('Content-Type') || '').toLowerCase();
       if (!contentType.startsWith('application/pdf')) throw new Error('Upload a PDF file.');
-      const filename = safePdfFilename(decodeURIComponent(request.headers.get('X-Upload-Filename') || ''));
+      const sourceFilename = safePdfFilename(decodeURIComponent(request.headers.get('X-Upload-Filename') || ''));
       const declaredSize = Number(request.headers.get('Content-Length') || 0);
       if (Number.isFinite(declaredSize) && declaredSize > MAX_PDF_BYTES) throw new Error('Upload a PDF smaller than 25 MB.');
       if (!request.body) throw new Error('Choose a valid PDF file.');
-      await ensureFileCanChange(env, filename);
-      await env.PAPERS.put(filename, pdfUploadStream(request.body), { httpMetadata: { contentType: 'application/pdf', contentDisposition: `attachment; filename="${filename}"` } });
+      // Give every upload a new, opaque storage key. The original filename is
+      // retained only as a safe display/download name, so an old paid link can
+      // never be silently overwritten by a later admin upload.
+      const storageContext = newStorageOperationContext();
+      const filename = await newUploadStorageKey(env, sourceFilename, storageContext);
+      await writePaper(env, filename, pdfUploadStream(request.body), storageContext);
       return json({ file: filename }, 201);
     } catch (error) {
       return apiErrorResponse(error, 'The PDF could not be uploaded.');
@@ -2759,9 +3025,9 @@ async function api(request, env, url) {
       const filename = safePdfFilename(decodeURIComponent(fileMatch[1]));
       const references = await env.DB.prepare('SELECT COUNT(*) AS count FROM cards WHERE file_key = ?').bind(filename).first();
       if (Number(references?.count)) return json({ error: 'Update or remove the linked study card before deleting this PDF.' }, 409);
-      const existing = await env.PAPERS.head(filename);
+      const existing = await paperExists(env, filename);
       if (!existing) return json({ error: 'The PDF was not found.' }, 404);
-      await env.PAPERS.delete(filename);
+      await removePaper(env, filename);
       return json({ ok: true });
     } catch (error) {
       return apiErrorResponse(error, 'The PDF could not be deleted.');

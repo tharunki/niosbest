@@ -1,6 +1,6 @@
 {
-  // A browseable catalogue/admin preview used only while the private R2 bucket
-  // is awaiting activation. It intentionally omits the PAPERS binding.
+  // A backwards-compatible catalogue/admin preview configuration. Supabase
+  // storage is reached only through Worker secrets, never through a binding.
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "best-education",
   "main": "./cloudflare/worker.mjs",

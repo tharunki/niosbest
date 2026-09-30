@@ -23,11 +23,5 @@
       "database_id": "859b8aa4-b6f7-4863-ac57-510e0f027d4c",
       "migrations_dir": "./cloudflare/migrations"
     }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "PAPERS",
-      "bucket_name": "best-education-papers"
-    }
   ]
 }
