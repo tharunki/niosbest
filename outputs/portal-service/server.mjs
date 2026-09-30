@@ -705,14 +705,26 @@ async function cleanupUncommittedAdmissionDocument({ enrollmentId, storageKey })
 }
 
 let zoomToken = null;
+// A teacher must always be able to schedule a class without waiting for the
+// academy's automatic Zoom configuration. Keep this guidance consistent for
+// every automatic-Zoom failure, and never expose provider responses or secrets.
+const zoomManualLinkNextStep = 'Paste a valid HTTPS Zoom or Google Meet link to schedule this class now. To restore automatic creation, ask an academy administrator to finish the Zoom host setup and review the Zoom app access.';
+function zoomSchedulingError(summary, status = 503) {
+  return Object.assign(new Error(`${summary} ${zoomManualLinkNextStep}`), { status });
+}
 async function zoomAccessToken() {
   const accountId = String(process.env.ZOOM_ACCOUNT_ID || '').trim(), clientId = String(process.env.ZOOM_CLIENT_ID || '').trim(), clientSecret = String(process.env.ZOOM_CLIENT_SECRET || '').trim();
-  if (!accountId || !clientId || !clientSecret) throw Object.assign(new Error('Zoom is not configured. Paste an HTTPS meeting link or configure the server-only Zoom OAuth variables.'), { status: 503 });
+  if (!accountId || !clientId || !clientSecret) throw zoomSchedulingError('Automatic Zoom creation is not configured.');
   if (zoomToken?.expiresAt > Date.now() + 60_000) return zoomToken.value;
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  const response = await fetch(`https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${encodeURIComponent(accountId)}`, { method: 'POST', headers: { authorization: `Basic ${basic}` }, signal: AbortSignal.timeout(12_000) });
+  let response;
+  try {
+    response = await fetch(`https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${encodeURIComponent(accountId)}`, { method: 'POST', headers: { authorization: `Basic ${basic}` }, signal: AbortSignal.timeout(12_000) });
+  } catch {
+    throw zoomSchedulingError('Automatic Zoom authorization is temporarily unavailable.', 502);
+  }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.access_token) throw Object.assign(new Error('Zoom authorization failed. Check the server-only Zoom credentials and app scopes.'), { status: 502 });
+  if (!response.ok || !payload.access_token) throw zoomSchedulingError('Automatic Zoom authorization could not be completed.', 502);
   zoomToken = { value: payload.access_token, expiresAt: Date.now() + Math.max(60, Number(payload.expires_in || 3600) - 60) * 1000 };
   return zoomToken.value;
 }
@@ -720,13 +732,18 @@ async function createZoomMeeting({ title, startsAt, durationMinutes }) {
   // A local preview must not create a real meeting merely because its developer
   // has production Zoom variables in .env. Production is intentionally
   // unaffected; an isolated development provider test must opt in explicitly.
-  if (!outboundDeliveryEnabled()) throw Object.assign(new Error('Automatic Zoom meeting creation is disabled in this development environment. Paste an HTTPS meeting link instead.'), { status: 503 });
+  if (!outboundDeliveryEnabled()) throw zoomSchedulingError('Automatic Zoom creation is not available in this development environment.');
   const hostUserId = String(process.env.ZOOM_HOST_USER_ID || '').trim();
-  if (!isSafeString(hostUserId, 254)) throw Object.assign(new Error('Zoom is connected, but the server-only ZOOM_HOST_USER_ID (the licensed host email or user ID) is missing. Paste an HTTPS meeting link or ask an administrator to finish Zoom setup.'), { status: 503 });
+  if (!isSafeString(hostUserId, 254)) throw zoomSchedulingError('Automatic Zoom creation is not ready because the licensed Zoom host is not configured.');
   const token = await zoomAccessToken();
-  const response = await fetch(`https://api.zoom.us/v2/users/${encodeURIComponent(hostUserId)}/meetings`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ topic: title, type: 2, start_time: startsAt, duration: durationMinutes, timezone: process.env.ZOOM_TIMEZONE || 'Asia/Kolkata', settings: { waiting_room: true, join_before_host: false } }), signal: AbortSignal.timeout(15_000) });
+  let response;
+  try {
+    response = await fetch(`https://api.zoom.us/v2/users/${encodeURIComponent(hostUserId)}/meetings`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ topic: title, type: 2, start_time: startsAt, duration: durationMinutes, timezone: process.env.ZOOM_TIMEZONE || 'Asia/Kolkata', settings: { waiting_room: true, join_before_host: false } }), signal: AbortSignal.timeout(15_000) });
+  } catch {
+    throw zoomSchedulingError('Automatic Zoom meeting creation is temporarily unavailable.', 502);
+  }
   const meeting = await response.json().catch(() => ({}));
-  if (!response.ok || !/^https:\/\//.test(meeting.join_url || '')) throw Object.assign(new Error('Zoom could not create this meeting. Use a valid HTTPS meeting link or verify Zoom app permissions.'), { status: 502 });
+  if (!response.ok || !/^https:\/\//.test(meeting.join_url || '')) throw zoomSchedulingError('Automatic Zoom meeting creation could not be completed.', 502);
   return { liveUrl: meeting.join_url, hostUrl: /^https:\/\//.test(meeting.start_url || '') ? meeting.start_url : null, meetingProvider: 'zoom' };
 }
 

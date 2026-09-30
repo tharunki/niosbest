@@ -35,7 +35,8 @@ const serverSource = await readFile(join(serviceDirectory, 'server.mjs'), 'utf8'
 assert.match(serverSource, /ZOOM_HOST_USER_ID/);
 assert.match(serverSource, /\/v2\/users\/\$\{encodeURIComponent\(hostUserId\)\}\/meetings/);
 assert.match(serverSource, /function outboundDeliveryEnabled\(\) \{\s*return isProduction \|\| process\.env\.ALLOW_DEVELOPMENT_OUTBOUND_DELIVERY === 'true';\s*\}/, 'development outbound delivery must require an explicit opt-in');
-assert.match(serverSource, /async function createZoomMeeting\(\{ title, startsAt, durationMinutes \}\) \{[\s\S]*?if \(!outboundDeliveryEnabled\(\)\) throw Object\.assign\(/, 'automatic Zoom creation must not run in development without the explicit outbound-delivery opt-in');
+assert.match(serverSource, /async function createZoomMeeting\(\{ title, startsAt, durationMinutes \}\) \{[\s\S]*?if \(!outboundDeliveryEnabled\(\)\) throw zoomSchedulingError\(/, 'automatic Zoom creation must not run in development without the explicit outbound-delivery opt-in');
+assert.match(serverSource, /const zoomManualLinkNextStep = 'Paste a valid HTTPS Zoom or Google Meet link to schedule this class now\./, 'automatic Zoom failures must provide a safe manual-link fallback');
 assert.match(serverSource, /isProduction \? \{\} : \{ token: session\.token \}/);
 assert.match(serverSource, /detectedUploadMime\(bytes\) !== mimeType/);
 assert.match(serverSource, /captureResourceOrder\(data, capture\)/);
