@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createStateStore, resolveStateStoreConfig, StateStoreError } from '../state-store.mjs';
+import { createStateStore, resolveStateStoreConfig, StateStoreError, supabaseStateDiagnosticNextAction } from '../state-store.mjs';
 
 let passed = 0;
 function ok(value, message) { assert.ok(value, message); passed += 1; }
@@ -34,6 +34,8 @@ try {
   passed += 1;
   assert.throws(() => resolveStateStoreConfig({ env: { PORTAL_STATE_DRIVER: 'supabase', SUPABASE_URL: 'http://example.test', SUPABASE_SERVICE_ROLE_KEY: 'server-only' }, isProduction: true, localFilePath: 'unused' }), StateStoreError);
   passed += 1;
+  ok(supabaseStateDiagnosticNextAction({ stateDriver: 'supabase', tableExists: true, bucketExists: true, bucketPrivate: true, stateRowInitialized: true }) === 'Supabase state and private storage are reachable. This deployment is already using durable Supabase state.', 'Supabase-backed deployments are not told to switch their state driver again');
+  ok(supabaseStateDiagnosticNextAction({ stateDriver: 'local', tableExists: true, bucketExists: true, bucketPrivate: true, stateRowInitialized: true }).includes('Switch PORTAL_STATE_DRIVER'), 'local deployments still receive the explicit transition instruction');
 
   const directory = await mkdtemp(join(tmpdir(), 'nios-state-store-'));
   try {

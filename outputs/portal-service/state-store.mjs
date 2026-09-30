@@ -14,6 +14,29 @@ export class StateStoreError extends Error {
   }
 }
 
+// Keep the operator-facing Supabase readiness wording consistent with the
+// actual state driver. In particular, a running Supabase-backed deployment
+// must not be told to "switch" again merely because an operations probe
+// confirms that its existing state row is healthy.
+export function supabaseStateDiagnosticNextAction({
+  stateDriver = '',
+  tableExists = false,
+  bucketExists = false,
+  bucketPrivate = false,
+  stateRowInitialized = false
+} = {}) {
+  if (!tableExists || !bucketExists || bucketPrivate !== true) {
+    return 'Apply the portal-state SQL migration and ensure the configured document bucket exists and remains private.';
+  }
+  if (!stateRowInitialized) {
+    return 'Portal-state table and private storage are ready. Set PORTAL_STATE_DRIVER=supabase and redeploy; the server will initialize its first state row.';
+  }
+  if (String(stateDriver).trim().toLowerCase() === 'supabase') {
+    return 'Supabase state and private storage are reachable. This deployment is already using durable Supabase state.';
+  }
+  return 'Supabase state and private storage are reachable. Switch PORTAL_STATE_DRIVER to supabase only when ready to initialize durable state.';
+}
+
 function validIdentifier(value, label) {
   const source = String(value || '').trim();
   if (!identifierPattern.test(source)) throw new StateStoreError(`${label} must contain only letters, numbers, and underscores.`, { code: 'STATE_STORE_CONFIG' });

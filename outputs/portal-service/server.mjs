@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { counselorReply } from './counselor.mjs';
 import { captureResourceOrder, resourceStore } from './resource-store.mjs';
 import { inspectResendSenderReadiness, resolveResendSenderConfiguration } from './resend-sender-readiness.mjs';
-import { createStateStore, resolveStateStoreConfig } from './state-store.mjs';
+import { createStateStore, resolveStateStoreConfig, supabaseStateDiagnosticNextAction } from './state-store.mjs';
 import { readFile, writeFile, mkdir, stat, unlink } from 'node:fs/promises';
 import { createHash, createHmac, randomBytes, randomInt, createCipheriv, createDecipheriv, timingSafeEqual, scryptSync } from 'node:crypto';
 import { dirname, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
@@ -1240,7 +1240,13 @@ async function integrationDiagnostics(state, { probe = false } = {}) {
       checks.supabase.bucketPrivate = bucket.ok ? details.public === false : null;
       if (!bucket.ok) checks.supabase.bucketCode = diagnosticFailure(bucket).code;
     } catch { Object.assign(checks.supabase, { bucketHttpStatus: null, bucketExists: false, bucketPrivate: null, bucketCode: 'provider-unavailable' }); }
-    checks.supabase.nextAction = checks.supabase.tableExists && checks.supabase.bucketExists && checks.supabase.bucketPrivate ? (checks.supabase.stateRowInitialized ? 'Supabase state and private storage are reachable. Switch PORTAL_STATE_DRIVER to supabase only when ready to initialize durable state.' : 'Portal-state table and private storage are ready. Set PORTAL_STATE_DRIVER=supabase and redeploy; the server will initialize its first state row.') : 'Apply the portal-state SQL migration and ensure the configured document bucket exists and remains private.';
+    checks.supabase.nextAction = supabaseStateDiagnosticNextAction({
+      stateDriver: stateStore.publicStatus().driver,
+      tableExists: checks.supabase.tableExists,
+      bucketExists: checks.supabase.bucketExists,
+      bucketPrivate: checks.supabase.bucketPrivate,
+      stateRowInitialized: checks.supabase.stateRowInitialized
+    });
   }
   return { checkedAt: now(), remoteChecks: true, checks };
 }
