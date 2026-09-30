@@ -36,6 +36,8 @@ For a public site without an approved NIOS data connector, set `NIOS_SYNC_MODE=m
 
 The addresses `niosbest.tvl@gmail.com` and `tkcrackjee@gmail.com` are permanent protected super administrators. They cannot be demoted through the staff API. On a fresh production deployment, use one of them as `BOOTSTRAP_ADMIN_EMAIL` with a unique 12+ character server-only password. That owner can then open `/admin/staff` and send a single-use, 24-hour Resend invitation to the second owner and to teachers.
 
+If both owners are locked out, set a fresh 32+ character `ADMIN_ACCOUNT_RECOVERY_TOKEN` temporarily in Render, deploy, and open `/recover-admin`. The form accepts only a permanent owner email, requires the server-only token, uses it once, and records an audit event without emailing or exposing a password. Remove or rotate the token immediately after recovery; it never replaces an existing owner password merely by being set.
+
 The owner controls can assign teachers to specific batches, allow or deny live-class scheduling, homework creation, material uploads and grading, suspend a teacher account, and restrict or restore individual online classes. These rules are enforced by the API, not only by the interface.
 
 - Generate a new 32-byte key with `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"` and set `APP_ENCRYPTION_KEY`.

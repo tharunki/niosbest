@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow,noarchive">
+  <title>Recover owner access — NIOS Best Academy</title>
+  <style>
+    :root{color-scheme:dark;--ink:#f5f3ff;--muted:#aaa9cb;--line:#3b376c;--panel:#171642;--violet:#8977ff;--bg:#0b0b29}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:22px;background:radial-gradient(circle at 10% 0,rgba(110,90,230,.25),transparent 38%),var(--bg);color:var(--ink);font:16px/1.5 system-ui}
+    .card{width:min(470px,100%);padding:31px;border:1px solid var(--line);border-radius:22px;background:rgba(23,22,66,.96);box-shadow:0 22px 70px rgba(0,0,0,.3)}
+    .eyebrow{font-size:11px;letter-spacing:.13em;font-weight:800;color:#c5bbff}h1{margin:8px 0;font-size:30px;line-height:1.13}p{color:var(--muted);margin:0 0 19px}label{display:block;margin:15px 0 7px;font-weight:700;font-size:13px}input,button{width:100%;box-sizing:border-box;font:inherit;border-radius:10px;padding:13px}input{border:1px solid #494477;background:#0f0e32;color:#fff}.password{position:relative}.password input{padding-right:52px}.password button{position:absolute;right:5px;top:5px;width:auto;padding:8px 10px;border:0;background:transparent;color:#d5d0ff;cursor:pointer;font-size:13px}.submit{margin-top:21px;border:0;background:linear-gradient(135deg,#aa9dff,#6c55df);color:#fff;font-weight:800;cursor:pointer}.submit:disabled{opacity:.65;cursor:wait}.notice{padding:12px;border-radius:11px;border:1px solid rgba(180,167,255,.25);background:rgba(137,119,255,.09);font-size:12px;color:#ddd9ff}.notice b{display:block;color:#fff;margin-bottom:3px}.status{min-height:24px;margin:15px 0 0;font-size:13px;color:#ffb9c5}.status.ok{color:#7ee5bd}.back{display:inline-block;margin-top:22px;color:#c7c1ff;text-decoration:none;font-size:13px}@media(max-width:480px){.card{padding:24px}.card h1{font-size:26px}}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="eyebrow">OWNER ACCOUNT RECOVERY</div>
+    <h1>Set a new admin password</h1>
+    <p>This page works only with a one-time recovery key created in the academy's secure server settings. It is for the two protected academy owner accounts only.</p>
+    <form id="recoveryForm">
+      <label for="email">Owner email</label>
+      <input id="email" type="email" autocomplete="username" required>
+      <label for="token">One-time recovery key</label>
+      <div class="password"><input id="token" type="password" autocomplete="off" required><button type="button" data-toggle="token" aria-label="Show recovery key">Show</button></div>
+      <label for="password">New password</label>
+      <div class="password"><input id="password" type="password" minlength="12" autocomplete="new-password" required><button type="button" data-toggle="password" aria-label="Show new password">Show</button></div>
+      <label for="confirmation">Confirm new password</label>
+      <div class="password"><input id="confirmation" type="password" minlength="12" autocomplete="new-password" required><button type="button" data-toggle="confirmation" aria-label="Show confirmed password">Show</button></div>
+      <div class="notice"><b>Keep this private</b>Never share the recovery key or your new password with anyone. The key becomes unusable after one successful reset.</div>
+      <button class="submit" id="submit">Reset owner password</button>
+    </form>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+    <a class="back" href="/login">← Back to sign in</a>
+  </main>
+  <script>
+    const byId=id=>document.getElementById(id),form=byId('recoveryForm'),status=byId('status'),submit=byId('submit');
+    document.querySelectorAll('[data-toggle]').forEach(button=>button.addEventListener('click',()=>{const input=byId(button.dataset.toggle),visible=input.type==='text';input.type=visible?'password':'text';button.textContent=visible?'Show':'Hide';button.setAttribute('aria-label',visible?`Show ${input.labels?.[0]?.textContent?.toLowerCase()||'value'}`:`Hide ${input.labels?.[0]?.textContent?.toLowerCase()||'value'}`)}));
+    form.addEventListener('submit',async event=>{event.preventDefault();const email=byId('email').value.trim(),token=byId('token').value,password=byId('password').value,passwordConfirmation=byId('confirmation').value;if(password!==passwordConfirmation){status.className='status';status.textContent='The new passwords do not match.';return}submit.disabled=true;status.className='status';status.textContent='Resetting securely…';try{const response=await fetch('/api/auth/admin-recovery',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email,token,password,passwordConfirmation})}),data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error||'The recovery details are invalid or have expired.');form.reset();status.className='status ok';status.textContent='Password reset. Redirecting to sign in…';setTimeout(()=>location.assign('/login'),900)}catch(error){status.className='status';status.textContent=error.message}finally{submit.disabled=false}});
+  </script>
+</body>
+</html>

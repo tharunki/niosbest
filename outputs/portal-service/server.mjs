@@ -70,7 +70,7 @@ function searchIndexingAllowed(request) {
   return !isProduction || Boolean(publicOrigin && requestHost(request) === publicOrigin.host.toLowerCase());
 }
 function isPrivateSearchPath(pathname) {
-  return /^\/(?:api|admin|admission-admin|dashboard|student-app|student-desk|active-student-dashboard|pending-admission-dashboard|batch-hub|teacher-portal|login|auth|checkout|payment-pending|admission-intake|admission-wizard|application-wizard|accept-invite|live-classes|homework|resource-checkout)(?:[./-]|$)/.test(pathname);
+  return /^\/(?:api|admin|admission-admin|dashboard|student-app|student-desk|active-student-dashboard|pending-admission-dashboard|batch-hub|teacher-portal|login|auth|checkout|payment-pending|admission-intake|admission-wizard|application-wizard|accept-invite|recover-admin|live-classes|homework|resource-checkout)(?:[./-]|$)/.test(pathname);
 }
 const stateStoreConfig = resolveStateStoreConfig({ isProduction, localFilePath: stateFile });
 const stateStore = await createStateStore(stateStoreConfig);
@@ -103,6 +103,17 @@ if (isProduction && adminToken.length < 32) throw new Error('Set a high-entropy 
 const bootstrapAdminEmail = String(process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
 const bootstrapAdminPassword = String(process.env.BOOTSTRAP_ADMIN_PASSWORD || '');
 const permanentSuperAdminEmails = new Set(['niosbest.tvl@gmail.com', 'tkcrackjee@gmail.com']);
+// Emergency owner recovery is deliberately opt-in. The raw token lives only
+// in the hosting provider's server-only environment; a successful use is
+// recorded by hash so the same token can never reset a second account.
+const adminRecoveryToken = String(process.env.ADMIN_ACCOUNT_RECOVERY_TOKEN || '');
+const adminRecoveryTokenHash = adminRecoveryToken.length >= 32 ? createHash('sha256').update(adminRecoveryToken).digest('hex') : '';
+function adminRecoveryEnabled() { return isProduction && Boolean(adminRecoveryTokenHash); }
+function matchesAdminRecoveryToken(value) {
+  if (!adminRecoveryTokenHash) return false;
+  const suppliedHash = createHash('sha256').update(String(value || '')).digest('hex');
+  return timingSafeEqual(Buffer.from(suppliedHash, 'hex'), Buffer.from(adminRecoveryTokenHash, 'hex'));
+}
 // An empty allow-list means a new teacher has no batch access until a super-admin assigns one.
 const defaultTeacherPermissions = () => ({ manageLiveClasses: false, manageHomework: false, manageMaterials: false, gradeSubmissions: false, allowedBatchIds: [] });
 
@@ -391,7 +402,7 @@ function initialState() {
         { id: 'doc_practical_demo', studentId: 'demo-aarav', type: 'practicalHallTicket', title: 'Practical hall ticket', status: 'Processing', source: 'mock', fileName: null, storageKey: null, issuedAt: null, updatedAt: now() },
         { id: 'doc_tma_demo', studentId: 'demo-aarav', type: 'tmaReceipt', title: 'TMA receipt', status: 'Pending', source: 'mock', fileName: null, storageKey: null, issuedAt: null, updatedAt: now() }
       ] : [],
-      jobs: [], syncLogs: [], audit: [], resources: [], notifications: [], enquiries: [], batches: seedBatches(), payments: [], enrollments: demosEnabled ? [{ id: 'enrol_demo_science', studentId: 'demo-aarav', batchId: 'batch_class12_stream1', streamId: 'science', board: 'NIOS', classLevel: '12', stream: 'Science', selectedSubjects: [{ code: '302', name: 'English' }, { code: '311', name: 'Mathematics' }, { code: '312', name: 'Physics' }, { code: '313', name: 'Chemistry' }, { code: '314', name: 'Biology' }], status: 'ACTIVE', activatedAt: now() }] : [], liveClasses: [], attendance: [], homework: [], submissions: [], materials: [], admissionDocuments: []
+      jobs: [], syncLogs: [], audit: [], resources: [], notifications: [], enquiries: [], adminRecoveryUses: [], batches: seedBatches(), payments: [], enrollments: demosEnabled ? [{ id: 'enrol_demo_science', studentId: 'demo-aarav', batchId: 'batch_class12_stream1', streamId: 'science', board: 'NIOS', classLevel: '12', stream: 'Science', selectedSubjects: [{ code: '302', name: 'English' }, { code: '311', name: 'Mathematics' }, { code: '312', name: 'Physics' }, { code: '313', name: 'Chemistry' }, { code: '314', name: 'Biology' }], status: 'ACTIVE', activatedAt: now() }] : [], liveClasses: [], attendance: [], homework: [], submissions: [], materials: [], admissionDocuments: []
   };
 }
 async function ensureState() {
@@ -405,6 +416,7 @@ await updateState(state => {
   if (!Array.isArray(state.users)) state.users = [];
   if (!Array.isArray(state.students)) state.students = [];
   if (!Array.isArray(state.audit)) state.audit = [];
+  if (!Array.isArray(state.adminRecoveryUses)) state.adminRecoveryUses = [];
   if (!state.vault || typeof state.vault !== 'object') state.vault = {};
   if (!state.vaultRecovery || typeof state.vaultRecovery !== 'object') state.vaultRecovery = {};
   for (const [studentId, record] of Object.entries(state.vault)) {
@@ -1421,7 +1433,7 @@ async function serveStatic(pathname, response, request) {
   if (!searchIndexingAllowed(request) && pathname === '/sitemap.xml') return send(response, 404, { error: 'Not found' });
   // Keep the legacy direct URL on the same clear owner-only staff experience.
   if (pathname === '/admin/staff' || pathname === '/admin-staff.html') pathname = '/admin-staff-v2.html';
-  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/manifest.json': '/student-app.webmanifest', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/resources': '/updates.html', '/resource-download-hub': '/updates.html', '/resource-download-hub.html': '/updates.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
+  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/manifest.json': '/student-app.webmanifest', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/resources': '/updates.html', '/resource-download-hub': '/updates.html', '/resource-download-hub.html': '/updates.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html', '/recover-admin': '/recover-admin.html' };
   let requested = pathname === '/' ? '/index.html' : (aliases[pathname] || pathname);
   if (!extname(requested)) requested += '.html';
   // Authorize the final resolved page, not just the original URL. Otherwise
@@ -1642,6 +1654,32 @@ const server = createServer(async (request, response) => {
     }
     if (method === 'POST' && path === '/api/auth/logout') return send(response, 200, { ok: true }, { 'set-cookie': `nios_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${isProduction ? '; Secure' : ''}` });
     if (method === 'POST' && path === '/api/auth/accept-invite') { const input = await body(request), token = String(input.token || ''), password = String(input.password || ''), throttleKey = enforceAuthThrottle(request, 'accept-invite', token || 'unknown', 8); if (token.length < 32 || password.length < 12) return send(response, 422, { error: 'Use a valid invitation and a password of at least 12 characters.' }); const tokenHash = createHash('sha256').update(token).digest('hex'); const accepted = await updateState(state => { const user = state.users.find(item => item.inviteTokenHash === tokenHash && Date.parse(item.inviteExpiresAt || '') > Date.now()); if (!user) throw Object.assign(new Error('This invitation is invalid or expired.'), { status: 410 }); user.passwordHash = hashPassword(password); user.requiresPasswordSetup = false; delete user.inviteTokenHash; delete user.inviteExpiresAt; user.passwordSetAt = now(); state.audit.push({ id: uid('audit'), at: now(), action: 'staff.invite-accepted', staffId: user.id, role: user.role }); return user; }); clearAuthThrottle(throttleKey); return send(response, 200, { user: publicUser(accepted) }); }
+    if (method === 'POST' && path === '/api/auth/admin-recovery') {
+      // This is an emergency, deliberately non-email recovery path for a
+      // permanent academy owner. It is disabled until an operator sets a
+      // unique, server-only token in the hosting environment.
+      if (!adminRecoveryEnabled()) return send(response, 404, { error: 'Not found' });
+      const input = await body(request), email = String(input.email || '').trim().toLowerCase(), token = String(input.token || ''), password = String(input.password || ''), passwordConfirmation = String(input.passwordConfirmation || '');
+      const throttleKey = enforceAuthThrottle(request, 'admin-recovery', email || 'unknown', 5);
+      if (!permanentSuperAdminEmails.has(email) || password.length < 12 || password !== passwordConfirmation || !matchesAdminRecoveryToken(token)) return send(response, 400, { error: 'The recovery details are invalid or have expired.' });
+      const usedTokenHash = createHash('sha256').update(token).digest('hex');
+      const recovered = await updateState(state => {
+        if (!Array.isArray(state.adminRecoveryUses)) state.adminRecoveryUses = [];
+        if (state.adminRecoveryUses.some(item => item.tokenHash === usedTokenHash)) throw Object.assign(new Error('The recovery details are invalid or have expired.'), { status: 410 });
+        const user = state.users.find(item => String(item.email || '').toLowerCase() === email && item.role === 'admin');
+        if (!user) throw Object.assign(new Error('The recovery details are invalid or have expired.'), { status: 400 });
+        user.passwordHash = hashPassword(password);
+        user.requiresPasswordSetup = false;
+        delete user.inviteTokenHash;
+        delete user.inviteExpiresAt;
+        user.passwordUpdatedAt = now();
+        state.adminRecoveryUses.push({ id: uid('admin-recovery'), tokenHash: usedTokenHash, ownerEmail: email, usedAt: now() });
+        state.audit.push({ id: uid('audit'), at: now(), action: 'owner.password-recovered', staffId: user.id, ownerEmail: email });
+        return user;
+      });
+      clearAuthThrottle(throttleKey);
+      return send(response, 200, { ok: true, user: publicUser(recovered) });
+    }
     if (method === 'GET' && path === '/api/auth/me') { const session = readSession(request); if (!session) return send(response, 401, { error: 'Sign-in is required.' }); const state = await readState(), user = state.users.find(item => item.id === session.sub); if (!user || !studentEmailIsVerified(user)) return send(response, 401, { error: 'Sign-in is required.' }); const student = user.studentId ? state.students.find(item => item.id === user.studentId) : null; return send(response, 200, { user: publicUser(user), profile: student ? publicStudent(student, state) : null }); }
     if (method === 'POST' && path === '/api/enquiries') {
       const input = await body(request), name = String(input.name || '').trim(), email = String(input.email || '').trim().toLowerCase(), phone = String(input.phone || '').trim(), topic = String(input.topic || '').trim(), message = String(input.message || '').trim();
