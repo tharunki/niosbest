@@ -34,6 +34,8 @@ assert.throws(() => captureResponse(resourceState, { ...capture, id: 'pay_other'
 const serverSource = await readFile(join(serviceDirectory, 'server.mjs'), 'utf8');
 assert.match(serverSource, /ZOOM_HOST_USER_ID/);
 assert.match(serverSource, /\/v2\/users\/\$\{encodeURIComponent\(hostUserId\)\}\/meetings/);
+assert.match(serverSource, /function outboundDeliveryEnabled\(\) \{\s*return isProduction \|\| process\.env\.ALLOW_DEVELOPMENT_OUTBOUND_DELIVERY === 'true';\s*\}/, 'development outbound delivery must require an explicit opt-in');
+assert.match(serverSource, /async function createZoomMeeting\(\{ title, startsAt, durationMinutes \}\) \{[\s\S]*?if \(!outboundDeliveryEnabled\(\)\) throw Object\.assign\(/, 'automatic Zoom creation must not run in development without the explicit outbound-delivery opt-in');
 assert.match(serverSource, /isProduction \? \{\} : \{ token: session\.token \}/);
 assert.match(serverSource, /detectedUploadMime\(bytes\) !== mimeType/);
 assert.match(serverSource, /captureResourceOrder\(data, capture\)/);
@@ -103,6 +105,9 @@ try {
   assert.equal(login.data.user.role, 'student');
   const activeDesk = await page('/active-student-dashboard', login.cookie);
   assert.match(activeDesk.body, /YOUR ACTIVE BATCH/, 'a signed-in active student may open the resolved desk route');
+  const studentApp = await page('/student-app', login.cookie);
+  assert.match(studentApp.body, /id="studentView"/, 'a signed-in student receives the Student App rather than a stale sign-in shell');
+  assert.match(studentApp.body, /__niosSessionBootstrap/, 'the Student App receives only a server-authorized session marker, never a browser token');
   const counselor = await api('/api/counselor', { method: 'POST', cookie: login.cookie, body: { message: 'What is my admission status?' } });
   assert.equal(counselor.response.status, 200);
   assert.equal(counselor.data.assistantType, 'academic-assistant');

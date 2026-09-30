@@ -42,3 +42,19 @@ test('anonymous counselor requests are denied',async({request})=>{
  const r=await request.post('/api/counselor',{data:{message:'Admission status'}});
  expect(r.status()).toBe(401);
 });
+
+test('Student App Mira keeps the authenticated cookie flow and has no private shell cache',async({page})=>{
+ await login(page,'STUDENT');
+ await page.goto('/student-app');
+ await expect(page.getByRole('heading',{name:/Welcome back/i})).toBeVisible();
+ await page.getByRole('button',{name:/Ask Mira/}).click();
+ const panel=page.locator('#assistantSheet');
+ await expect(panel).toBeVisible();
+ await panel.getByRole('button',{name:'TMA help',exact:true}).click();
+ await expect(panel.locator('.message')).toContainText('official NIOS TMA');
+ const worker=await page.request.get('/student-app-sw.js');
+ expect(worker.status()).toBe(200);
+ const workerText=await worker.text();
+ expect(workerText).not.toContain("'/student-app.html'");
+ expect(workerText).toContain('nios-student-app-assets-v3');
+});

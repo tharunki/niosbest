@@ -28,6 +28,13 @@ const stateFile = join(stateDir, 'state.json');
 const port = Number(process.env.PORT || 3000);
 const isProduction = process.env.NODE_ENV === 'production';
 const demosEnabled = !isProduction && process.env.ALLOW_DEMO_ACCOUNTS !== 'false';
+// Local development and automated QA must never accidentally deliver a real
+// email, SMS, WhatsApp message, or webhook merely because a developer has a
+// production `.env` file on their machine. Production delivery remains on;
+// a developer must opt in explicitly when testing an external provider.
+function outboundDeliveryEnabled() {
+  return isProduction || process.env.ALLOW_DEVELOPMENT_OUTBOUND_DELIVERY === 'true';
+}
 function s3EndpointConfigurationError(value) {
   const source = String(value || '').trim();
   if (!source) return null; // Default AWS endpoints are always HTTPS.
@@ -167,9 +174,35 @@ const emailVerificationAttemptLimit = 8;
 function studentEmailIsVerified(user) { return user?.role !== 'student' || Boolean(user?.emailVerifiedAt); }
 function emailVerificationTestMode() { return !isProduction && process.env.EMAIL_VERIFICATION_TEST_MODE === 'true'; }
 function emailVerificationDeliveryConfig() {
+  if (!outboundDeliveryEnabled()) return null;
   const apiKey = String(process.env.RESEND_API_KEY || '').trim();
   const from = String(process.env.EMAIL_VERIFICATION_FROM || process.env.ADMISSION_EMAIL_FROM || '').trim();
   return apiKey && from ? { apiKey, from } : null;
+}
+function publicAvailability() {
+  // This deliberately contains operational state rather than configuration
+  // values. It lets public pages explain a temporary pause without revealing
+  // provider names, endpoint details, or which credentials are absent.
+  const secureWritesReady = !isProduction || productionWritesReady;
+  const emailReady = !isProduction || Boolean(emailVerificationDeliveryConfig());
+  const paymentProvider = String(process.env.PAYMENT_PROVIDER || 'mock').trim().toLowerCase();
+  const paymentReady = !isProduction || (paymentProvider === 'razorpay' && ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'].every(name => String(process.env[name] || '').trim()));
+  const applicationMessage = secureWritesReady
+    ? 'New admission applications are available.'
+    : 'New admission applications are temporarily paused while secure student data storage is being configured. Existing learners can still sign in to view their current access.';
+  return {
+    publicPages: { available: true },
+    signIn: { available: true, message: 'Existing students, teachers, and administrators can sign in normally.' },
+    newAccounts: {
+      available: secureWritesReady && emailReady,
+      message: !secureWritesReady ? applicationMessage : (emailReady ? 'New accounts can be verified by email.' : 'New account verification is temporarily unavailable. Please try again later or contact the academy.')
+    },
+    applications: { available: secureWritesReady, message: applicationMessage },
+    payments: {
+      available: secureWritesReady && paymentReady,
+      message: !secureWritesReady ? applicationMessage : (paymentReady ? 'Secure online payment is available for submitted applications.' : 'Secure online payment is temporarily unavailable. Your submitted application remains protected; please try again later.')
+    }
+  };
 }
 function emailVerificationCodeHash(userId, code) {
   // The six-digit code is deliberately never written to state. A keyed HMAC
@@ -283,7 +316,7 @@ function readSession(request) { const bearer = isProduction ? '' : String(reques
 
 function initialState() {
   return {
-      users: demosEnabled ? [{ id: 'user_demo_aarav', studentId: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', passwordHash: hashPassword('student123'), role: 'student', emailVerifiedAt: now(), createdAt: now() }, { id: 'user_admin', name: 'Academy Admin', email: 'admin@niosbest.in', passwordHash: hashPassword('admin123'), role: 'admin', createdAt: now() }, { id: 'user_teacher_science', name: 'Dr. Meera Iyer', email: 'teacher@niosbest.in', passwordHash: hashPassword('teacher123'), role: 'teacher', createdAt: now() }] : [],
+      users: demosEnabled ? [{ id: 'user_demo_aarav', studentId: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', passwordHash: hashPassword('student123'), role: 'student', emailVerifiedAt: now(), createdAt: now() }, { id: 'user_admin', name: 'Academy Admin', email: 'admin@niosbest.in', passwordHash: hashPassword('admin123'), role: 'admin', createdAt: now() }, { id: 'user_teacher_science', name: 'Dr. Meera Iyer', email: 'teacher@niosbest.in', passwordHash: hashPassword('teacher123'), role: 'teacher', permissions: { manageLiveClasses: true, manageHomework: true, manageMaterials: true, gradeSubmissions: true, allowedBatchIds: ['batch_class12_stream1'] }, createdAt: now() }] : [],
       students: demosEnabled ? [{ id: 'demo-aarav', name: 'Aarav Patel', email: 'aarav@example.com', phone: '+919999999999', board: 'NIOS', boardCode: 'NIOS', classLevel: '12', referenceNumber: 'RF-26-0920-184', subjects: [{ code: '302', name: 'English', tmaStatus: 'Submitted', practicalGuide: false, progress: 78 }, { code: '311', name: 'Mathematics', tmaStatus: 'In progress', practicalGuide: false, progress: 62 }, { code: '312', name: 'Physics', tmaStatus: 'Draft due', practicalGuide: true, progress: 54 }, { code: '313', name: 'Chemistry', tmaStatus: 'Pending', practicalGuide: true, progress: 41 }, { code: '314', name: 'Biology', tmaStatus: 'Pending', practicalGuide: true, progress: 36 }], createdAt: now() }] : [],
       vault: demosEnabled ? { 'demo-aarav': encrypt({ enrollmentNumber: '123456789012', referenceNumber: 'RF-26-0920-184', dateOfBirth: '2007-08-14', boardCode: 'NIOS', consent: true, consentedAt: now() }) } : {}, vaultRecovery: {},
       documents: demosEnabled ? [
@@ -364,7 +397,7 @@ async function updateState(mutator) { return stateStore.update(mutator); }
 
 const sseClients = new Map();
 async function forwardWebhook(event) {
-  if (!process.env.WEBHOOK_URL) return;
+  if (!outboundDeliveryEnabled() || !process.env.WEBHOOK_URL) return;
   try { await fetch(process.env.WEBHOOK_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(event), signal: AbortSignal.timeout(8_000) }); }
   catch (error) { console.warn('Webhook delivery failed:', error.message); }
 }
@@ -511,7 +544,7 @@ function publicAdmissionDocument(document) { const { storageKey, ...safe } = doc
 async function sendAdmissionIntakeNotice(state, enrollment) {
   const student = state.students.find(item => item.id === enrollment.studentId), application = { enrollmentId: enrollment.id, assignedBatchCode: enrollment.assignedBatchCode, status: enrollment.status, student: student ? { id: student.id, name: student.name, email: student.email, phone: student.phone } : null, selectedSubjects: enrollment.selectedSubjects || [], documentTypes: state.admissionDocuments.filter(item => item.enrollmentId === enrollment.id).map(item => item.type) };
   const publicUrl = String(process.env.APP_PUBLIC_URL || '').replace(/\/$/, ''), documentLinks = state.admissionDocuments.filter(item => item.enrollmentId === enrollment.id).map(item => `${item.label}: ${publicUrl ? `${publicUrl}/api/admin/admission-documents/${item.id}/download` : `Admin portal → application ${enrollment.id}`}`).join('\n'), text = `New paid-gated admission application\n\nStudent: ${student?.name || 'Student'}\nEmail: ${student?.email || '—'}\nPhone: ${student?.phone || '—'}\nBatch: ${application.assignedBatchCode}\nSubjects: ${(application.selectedSubjects || []).map(item => `${item.code} ${item.name}`).join(', ')}\n\nProtected documents:\n${documentLinks}\n\nOpen the authenticated admin portal to review/download files.`;
-  const attemptedAt = now(), provider = process.env.RESEND_API_KEY && process.env.ADMIN_ADMISSION_EMAIL ? 'resend' : process.env.ADMISSION_INTAKE_WEBHOOK_URL ? 'webhook' : 'academy-review-queue';
+  const attemptedAt = now(), deliveryEnabled = outboundDeliveryEnabled(), provider = deliveryEnabled && process.env.RESEND_API_KEY && process.env.ADMIN_ADMISSION_EMAIL ? 'resend' : deliveryEnabled && process.env.ADMISSION_INTAKE_WEBHOOK_URL ? 'webhook' : 'academy-review-queue';
   try {
     if (provider === 'resend') { const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM || 'Admissions <onboarding@resend.dev>', to: [process.env.ADMIN_ADMISSION_EMAIL], subject: `New NIOS application — ${student?.name || enrollment.id}`, text }), signal: AbortSignal.timeout(12_000) }); if (!response.ok) throw new Error(`Admin email delivery failed: ${response.status}`); return { status: 'sent', provider, attemptedAt, error: null }; }
     if (provider === 'webhook') { const response = await fetch(process.env.ADMISSION_INTAKE_WEBHOOK_URL, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'admission.submitted', at: attemptedAt, application, text }), signal: AbortSignal.timeout(8_000) }); if (!response.ok) throw new Error(`Intake webhook delivery failed: ${response.status}`); return { status: 'sent', provider, attemptedAt, error: null }; }
@@ -519,7 +552,7 @@ async function sendAdmissionIntakeNotice(state, enrollment) {
   } catch (error) { const message = String(error.message || 'Notification delivery failed.').slice(0, 300); console.warn('Admission intake notification failed:', message); return { status: 'failed', provider, attemptedAt, error: message }; }
 }
 async function sendEnquiryNotice(enquiry) {
-  if (!process.env.RESEND_API_KEY || !process.env.ADMIN_ADMISSION_EMAIL) return 'queued';
+  if (!outboundDeliveryEnabled() || !process.env.RESEND_API_KEY || !process.env.ADMIN_ADMISSION_EMAIL) return 'queued';
   const text = `New website enquiry\n\nName: ${enquiry.name}\nEmail: ${enquiry.email}\nMobile: ${enquiry.phone}\nTopic: ${enquiry.topic}\n\nMessage:\n${enquiry.message}${enquiry.attachmentName ? `\n\nAttachment stored securely: ${enquiry.attachmentName}` : ''}`;
   try {
     const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM || 'Admissions <onboarding@resend.dev>', to: [process.env.ADMIN_ADMISSION_EMAIL], subject: `Website enquiry — ${enquiry.topic}`, text }), signal: AbortSignal.timeout(12_000) });
@@ -530,7 +563,7 @@ async function sendEnquiryNotice(enquiry) {
 async function sendStaffInvite(email, token, role = 'teacher') {
   const publicUrl = String(process.env.APP_PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
   const setupUrl = `${publicUrl}/accept-invite?token=${encodeURIComponent(token)}`;
-  if (!process.env.RESEND_API_KEY) return { delivered: false, setupUrl: isProduction ? null : setupUrl };
+  if (!outboundDeliveryEnabled() || !process.env.RESEND_API_KEY) return { delivered: false, setupUrl: isProduction ? null : setupUrl };
   const response = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'content-type': 'application/json' }, body: JSON.stringify({ from: process.env.ADMISSION_EMAIL_FROM || 'NIOS Best Academy <onboarding@resend.dev>', to: [email], subject: `Set up your ${role === 'admin' ? 'administrator' : 'teacher'} account`, text: `You have been invited to NIOS Best Academy. Create your password using this single-use link (valid for 24 hours):\n\n${setupUrl}\n\nIf you did not expect this invitation, ignore this email.` }), signal: AbortSignal.timeout(12_000) });
   if (!response.ok) throw Object.assign(new Error(`Invitation email delivery failed with HTTP ${response.status}.`), { status: 502 });
   return { delivered: true, setupUrl: null };
@@ -678,6 +711,10 @@ async function zoomAccessToken() {
   return zoomToken.value;
 }
 async function createZoomMeeting({ title, startsAt, durationMinutes }) {
+  // A local preview must not create a real meeting merely because its developer
+  // has production Zoom variables in .env. Production is intentionally
+  // unaffected; an isolated development provider test must opt in explicitly.
+  if (!outboundDeliveryEnabled()) throw Object.assign(new Error('Automatic Zoom meeting creation is disabled in this development environment. Paste an HTTPS meeting link instead.'), { status: 503 });
   const hostUserId = String(process.env.ZOOM_HOST_USER_ID || '').trim();
   if (!isSafeString(hostUserId, 254)) throw Object.assign(new Error('Zoom is connected, but the server-only ZOOM_HOST_USER_ID (the licensed host email or user ID) is missing. Paste an HTTPS meeting link or ask an administrator to finish Zoom setup.'), { status: 503 });
   const token = await zoomAccessToken();
@@ -688,7 +725,7 @@ async function createZoomMeeting({ title, startsAt, durationMinutes }) {
 }
 
 async function sendNotification(student, message, options = {}) {
-  const provider = process.env.NOTIFICATION_PROVIDER || 'mock';
+  const provider = outboundDeliveryEnabled() ? (process.env.NOTIFICATION_PROVIDER || 'mock') : 'mock';
   const subject = isSafeString(String(options.subject || ''), 140) ? String(options.subject).trim() : 'Update from NIOS Best Academy';
   const kind = isSafeString(String(options.kind || ''), 60) ? String(options.kind).trim() : 'general';
   const payload = { studentId: student.id, channel: provider, kind, message, at: now() };
@@ -1358,7 +1395,8 @@ const server = createServer(async (request, response) => {
         code: 'DURABLE_STATE_REQUIRED',
         stateStore: stateStore.publicStatus(),
         storageDriver: normalizedStorageDriver,
-        setup: 'Apply the portal-state migration and set PORTAL_STATE_DRIVER=supabase with the server-only Supabase variables.'
+        setup: 'Apply the portal-state migration and set PORTAL_STATE_DRIVER=supabase with the server-only Supabase variables.',
+        availability: publicAvailability()
       });
     }
     if (path === '/api/counselor' && method === 'POST') {
@@ -1389,8 +1427,10 @@ const server = createServer(async (request, response) => {
       notificationProvider: process.env.NOTIFICATION_PROVIDER || 'mock',
       stateStore: stateStore.publicStatus(),
       durableFileStorage,
+      availability: publicAvailability(),
       at: now()
     });
+    if (method === 'GET' && path === '/api/public/availability') return send(response, 200, { ...publicAvailability(), at: now() });
     if (method === 'GET' && path === '/api/admission-cycle') { const route = String(url.searchParams.get('route') || 'stream1'); return send(response, 200, admissionCycle(route)); }
     if (method === 'GET' && path === '/api/batches') { const state = await readState(); return send(response, 200, state.batches.filter(batch => { const cycle = batch.board === 'NIOS' ? admissionCycle(batchAdmissionRoute(batch)) : { isOpen: true, route: 'always' }; return batch.published !== false && cycle.isOpen; }).map(batch => { const cycle = batch.board === 'NIOS' ? admissionCycle(batchAdmissionRoute(batch)) : { isOpen: true, route: 'always', lateFee: false }; return { ...batch, admission: cycle, assignedBatchCode: batch.board === 'NIOS' ? assignedBatchCode(batch, cycle) : `BATCH-${batch.id.toUpperCase()}` }; })); }
     if (method === 'POST' && path === '/api/auth/register') {

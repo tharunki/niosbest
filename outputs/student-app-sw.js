@@ -1,16 +1,18 @@
-const CACHE = 'nios-student-app-shell-v2';
-const APP_SHELL = [
-  '/student-app.html',
+const CACHE = 'nios-student-app-assets-v3';
+// Only public, user-independent assets may be cached. In particular, never
+// cache the protected HTML route: the server may return either the Student App
+// or the sign-in page for the same URL depending on the current session.
+const APP_ASSETS = [
   '/student-app.css',
   '/student-app.js',
   '/student-app.webmanifest',
   '/student-app-icon.svg'
 ];
 
-// Student records, document links and API responses are deliberately never
-// cached. Installing this app only makes the public shell available offline.
+// Student HTML, records, document links and API responses are deliberately
+// never cached. Offline storage contains only the non-sensitive app assets.
 self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(APP_ASSETS)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', event => {
@@ -22,13 +24,15 @@ self.addEventListener('fetch', event => {
   const url = new URL(request.url);
   if (request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.startsWith('/api/')) return;
 
-  const shellPath = url.pathname === '/student-app.html' || APP_SHELL.includes(url.pathname);
-  if (!shellPath) return;
+  if (!APP_ASSETS.includes(url.pathname)) return;
 
-  // Network-first keeps security and UI fixes immediately available. The cached
-  // shell is only the offline fallback; private API data is never cached.
+  // Network-first keeps security and UI fixes immediately available. The cache
+  // is only an offline fallback for public static assets.
   event.respondWith(fetch(request).then(response => {
-    if (response.ok) caches.open(CACHE).then(cache => cache.put(request, response.clone()));
+    const cacheControl = response.headers.get('cache-control') || '';
+    if (response.ok && !/\b(?:no-store|private)\b/i.test(cacheControl)) {
+      caches.open(CACHE).then(cache => cache.put(request, response.clone()));
+    }
     return response;
   }).catch(() => caches.match(request)));
 });

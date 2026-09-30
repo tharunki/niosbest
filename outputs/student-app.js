@@ -355,6 +355,18 @@
 
   function closeAssistant() { byId('assistantSheet').hidden = true; }
 
+  function showAssistantSignInRequired() {
+    // The app shell can outlive the 12-hour secure cookie in an installed PWA.
+    // Make that state explicit rather than leaving an apparently working chat
+    // panel with a raw API error. The next sign-in issues a fresh HttpOnly
+    // session cookie; no client token is retained here.
+    state.user = null;
+    state.dashboard = null;
+    closeAssistant();
+    showView('guestView');
+    tell('Your sign-in session has ended. Please sign in again to use Mira.', true);
+  }
+
   async function askMira(question) {
     const input = byId('assistantInput');
     const text = String(question || input.value || '').trim();
@@ -373,6 +385,10 @@
     setText('assistantStatus', 'Mira is matching your question to Student Desk guidance…');
     try {
       const result = await api('/api/counselor', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ message: text, topic: state.assistantTopic }), timeout: 15000 });
+      if (result.response.status === 401) {
+        showAssistantSignInRequired();
+        return;
+      }
       if (!result.response.ok) throw new Error(result.data.error || 'Mira is unavailable right now.');
       state.assistantTopic = result.data.topic || '';
       appendMessage(result.data);
@@ -401,7 +417,9 @@
   function registerServiceWorker() {
     const supportedOrigin = window.location.protocol === 'https:' || window.location.hostname === 'localhost';
     if (!supportedOrigin || !('serviceWorker' in navigator)) return;
-    navigator.serviceWorker.register('/student-app-sw.js', { scope: '/' }).catch(() => {});
+    // `none` makes browser update checks bypass stale HTTP caches. Together
+    // with the v3 worker this removes historical private HTML cache entries.
+    navigator.serviceWorker.register('/student-app-sw.js', { scope: '/', updateViaCache: 'none' }).catch(() => {});
   }
 
   byId('retryButton').addEventListener('click', load);

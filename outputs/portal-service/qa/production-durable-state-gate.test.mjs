@@ -51,6 +51,11 @@ try {
   assert.equal(health.storage, 'supabase', 'storage driver is normalized once for health and runtime operations');
   assert.equal(health.durableFileStorage, false, 'incomplete remote-storage configuration must not unlock production writes');
   assert.equal(health.stateStore.writeReady, false, 'health does not advertise unsafe local production writes as ready');
+  assert.equal(health.availability.applications.available, false, 'public status must warn that admissions are paused when durable writes are locked');
+  assert.equal(health.availability.signIn.available, true, 'an operational pause must not hide existing account sign-in');
+  const publicAvailability = await (await fetch(`http://127.0.0.1:${port}/api/public/availability`)).json();
+  assert.equal(publicAvailability.applications.available, false, 'the public status endpoint mirrors the safe write gate without exposing credentials');
+  assert.match(publicAvailability.applications.message, /temporarily paused/i);
   const registration = await fetch(`http://127.0.0.1:${port}/api/auth/register`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name: 'Blocked Student', email: 'blocked@example.test', phone: '+919999999999', password: 'safe-test-password' })
@@ -58,7 +63,8 @@ try {
   const body = await registration.json();
   assert.equal(registration.status, 503, 'production registration is blocked without durable state');
   assert.equal(body.code, 'DURABLE_STATE_REQUIRED');
-  console.log('production-durable-state-gate.test.mjs: 7 passed');
+  assert.equal(body.availability.applications.available, false, 'blocked write responses include a safe recovery state for the interface');
+  console.log('production-durable-state-gate.test.mjs: 12 passed');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolvePromise => child.once('exit', resolvePromise));

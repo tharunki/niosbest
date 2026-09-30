@@ -49,10 +49,14 @@ try {
   assert.match(intakePage, /Only if applicable or requested/);
   assert.match(intakePage, /limit=image\?1024\*1024:6\*1024\*1024/);
   assert.match(intakePage, /Images must be 1 MB or smaller/);
+  assert.match(intakePage, /optimizeImageForAdmission/);
+  assert.match(intakePage, /Image optimized privately in your browser/);
   assert.match(activeWizardPage, /Required for every application/);
   assert.match(activeWizardPage, /Only if applicable or requested/);
   assert.match(activeWizardPage, /limit=image\?1024\*1024:6\*1024\*1024/);
   assert.match(activeWizardPage, /Images must be 1 MB or smaller/);
+  assert.match(activeWizardPage, /optimizeImageForAdmission/);
+  assert.match(activeWizardPage, /Image optimized privately in your browser/);
   assert.match(serverSource, /'\/admission-intake': '\/admission-wizard-v2\.html'/);
   await waitForService();
   const login = await api('/api/auth/login', { method: 'POST', body: { email: 'aarav@example.com', password: 'student123' } });
@@ -135,6 +139,10 @@ try {
   assert.equal(completeIntake.data.canSubmit, true, 'conditional uploads must not change submission eligibility');
   const submitted = await api('/api/admission/submit', { method: 'POST', cookie: login.cookie });
   assert.equal(submitted.response.status, 200);
+  const persisted = JSON.parse(await readFile(join(stateDirectory, 'state.json'), 'utf8'));
+  const persistedEnrollment = persisted.enrollments.find(item => item.id === application.data.id);
+  assert.equal(persistedEnrollment.intakeNotice?.status, 'queued', 'development QA must not send a real intake email');
+  assert.equal(persistedEnrollment.intakeNotice?.provider, 'academy-review-queue', 'development QA must not invoke a configured delivery provider');
   console.log('admission-documents.test.mjs: required/conditional checklist and image limits passed');
 } finally {
   child.kill('SIGTERM');

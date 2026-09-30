@@ -49,6 +49,16 @@ The owner controls can assign teachers to specific batches, allow or deny live-c
 - Put an authorised server-to-server NIOS connector behind `OFFICIAL_NIOS_CONNECTOR_URL`; that connector must have written permission and perform the official authentication journey without defeating CAPTCHA, OTP, rate limits, or access controls.
 - Set `TRUST_PROXY=true` only behind a trusted reverse proxy that overwrites `X-Forwarded-For`; otherwise the server deliberately ignores that client-controlled header when rate-limiting sign-in and verification attempts. Protect the admin API with `ADMIN_API_TOKEN`; in production, add real authentication/authorization ahead of the API gateway.
 
+### Render health and safe availability states
+
+For this repository-root deployment, use Render's build command `echo "No build required"`, start command `node outputs/portal-service/server.mjs`, and health-check path `/api/health`. A `200` response means the web server can serve public pages; it does **not** mean the portal is allowed to accept student records. Check `readyForWrites: true` before announcing live admissions. When it is false, the site remains readable, existing users can still reach their signed-in pages, and the public batch, account, admission, and payment screens show a clear temporary-pause message rather than collecting data into Render's ephemeral disk.
+
+`GET /api/public/availability` is safe to use from the public interface. It deliberately reports only whether sign-in, new-account verification, applications, and payments are currently available; it never reveals a provider, key, bucket, endpoint, or missing secret. For the full owner-only readiness view, sign in as an administrator and open `/admin/operations`. The **Verify connections** button performs read-only provider checks: it does not send an email, upload a file, create a Zoom meeting, or read student documents.
+
+### Safe development delivery
+
+External delivery is disabled by default whenever `NODE_ENV` is not `production`, even if a local `.env` contains real Resend, Twilio, WATI, or webhook credentials. This protects local previews and automated QA from accidentally contacting students or staff. Set `ALLOW_DEVELOPMENT_OUTBOUND_DELIVERY=true` only for a deliberate, isolated provider test; production delivery behavior is unchanged.
+
 ## Important safeguards
 
 The browser never receives portal credentials. Enrollment number, reference number, date of birth, and board code are encrypted with AES-256-GCM in the server-side vault. Sync runs only after an explicit `consent: true` vault request. The system records audit entries, emits internal browser events, and only sends notifications for newly issued documents.
