@@ -1,0 +1,19 @@
+{
+  "name": "NIOS Best Academy",
+  "short_name": "NIOS Best",
+  "description": "Independent open-schooling guidance, study resources and student support.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0b29",
+  "theme_color": "#0c0c29",
+  "icons": [
+    {
+      "src": "/student-app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

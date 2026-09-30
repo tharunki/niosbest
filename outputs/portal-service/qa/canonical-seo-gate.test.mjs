@@ -67,8 +67,44 @@ try {
   assert.equal(publicHome.headers['x-robots-tag'], undefined, 'configured public host may be indexed');
   assert.match(publicHome.body, /https:\/\/academy\.example/, 'canonical metadata must use the configured public origin');
   assert.doesNotMatch(publicHome.body, /https:\/\/niosbest\.in/, 'stale hard-coded canonical origin must be replaced');
+  assert.match(publicHome.body, /href="\/student-guides"/, 'homepage must link to the crawlable student-guides hub');
+  assert.match(publicHome.body, /rel="icon" href="\/student-app-icon\.svg"/, 'homepage must declare a browser icon');
+  assert.match(publicHome.body, /rel="manifest" href="\/manifest\.webmanifest"/, 'homepage must declare the public web manifest');
+
+  const favicon = await get('/favicon.ico', 'academy.example');
+  assert.equal(favicon.status, 200);
+  assert.match(String(favicon.headers['content-type']), /^image\/svg\+xml/i, 'favicon fallback must resolve to a valid icon asset');
+  const manifest = await get('/manifest.webmanifest', 'academy.example');
+  assert.equal(manifest.status, 200);
+  assert.match(String(manifest.headers['content-type']), /^application\/manifest\+json/i, 'public manifest must have the correct MIME type');
+  assert.equal(JSON.parse(manifest.body).start_url, '/', 'public manifest must open the public homepage');
+  const guideHub = await get('/student-guides', 'academy.example');
+  assert.equal(guideHub.status, 200);
+  assert.match(guideHub.body, /https:\/\/academy\.example\/student-guides/, 'guide hub must receive the configured canonical origin');
+  assert.match(guideHub.body, /href="\/nios-on-demand-exam"/, 'guide hub must discover the on-demand examination guide');
+  assert.match(guideHub.body, /href="\/nios-transfer-of-credit"/, 'guide hub must discover the transfer-of-credit guide');
+
+  // Search engines should see exactly one clean public URL per document.
+  // Preserve campaign attribution, but convert legacy .html and resource-hub
+  // paths into permanent clean-URL redirects rather than duplicate pages.
+  const duplicateHome = await get('/index.html?utm_source=search', 'academy.example');
+  assert.equal(duplicateHome.status, 301);
+  assert.equal(duplicateHome.headers.location, '/?utm_source=search');
+  const duplicateArticle = await get('/nios-admission-2026.html?utm_campaign=admission', 'academy.example');
+  assert.equal(duplicateArticle.status, 301);
+  assert.equal(duplicateArticle.headers.location, '/nios-admission-2026?utm_campaign=admission');
+  const legacyResourceHub = await get('/resource-download-hub', 'academy.example');
+  assert.equal(legacyResourceHub.status, 301);
+  assert.equal(legacyResourceHub.headers.location, '/updates');
+  const legacyFragment = await get('/courses?utm_medium=social', 'academy.example');
+  assert.equal(legacyFragment.status, 301);
+  assert.equal(legacyFragment.headers.location, '/?utm_medium=social#courses');
+  const wwwVariant = await get('/nios-admission-2026?utm_source=www', 'www.academy.example');
+  assert.equal(wwwVariant.status, 301);
+  assert.equal(wwwVariant.headers.location, 'https://academy.example/nios-admission-2026?utm_source=www');
+
   assert.match((await get('/student-app.html', 'academy.example')).headers['x-robots-tag'], /noindex/i, 'private student-app route must remain noindex');
-  console.log('canonical-seo-gate.test.mjs: 10 passed');
+  console.log('canonical-seo-gate.test.mjs: 32 passed');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolvePromise => child.once('exit', resolvePromise));

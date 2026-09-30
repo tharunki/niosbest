@@ -95,6 +95,20 @@ function searchIndexingAllowed(request) {
   // HTTPS public hostname may be indexed; Render and preview hostnames cannot.
   return !isProduction || Boolean(publicOrigin && requestHost(request) === publicOrigin.host.toLowerCase());
 }
+function canonicalHostRedirect(request) {
+  // If both apex and www reach this service, consolidate them before a crawler
+  // sees page metadata. Deliberately accept only the one safe sibling hostname,
+  // never arbitrary Host headers.
+  if (!publicOrigin) return null;
+  const configuredName = publicOrigin.hostname.toLowerCase();
+  const siblingName = configuredName.startsWith('www.') ? configuredName.slice(4) : `www.${configuredName}`;
+  const siblingHost = `${siblingName}${publicOrigin.port ? `:${publicOrigin.port}` : ''}`;
+  if (requestHost(request) !== siblingHost) return null;
+  try {
+    const requested = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+    return `${publicOrigin.origin}${requested.pathname}${requested.search}`;
+  } catch { return null; }
+}
 function isPrivateSearchPath(pathname) {
   return /^\/(?:api|admin|admission-admin|dashboard|student-app|student-desk|active-student-dashboard|pending-admission-dashboard|batch-hub|teacher-portal|login|auth|checkout|payment-pending|admission-intake|admission-wizard|application-wizard|accept-invite|recover-admin|live-classes|homework|resource-checkout)(?:[./-]|$)/.test(pathname);
 }
@@ -1516,13 +1530,52 @@ const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 async function serveStatic(pathname, response, request) {
   // Never expose backend configuration, state, credentials or QA artifacts.
   if (pathname.includes('\\') || pathname.split('/').some(part => part.startsWith('.')) || pathname.startsWith('/portal-service/')) return send(response, 404, { error: 'Not found' });
-  // A few human-friendly addresses have historically been shared even though
-  // their content lives on the landing page or under a longer policy URL.
-  // Redirect rather than serving a blank or unrelated page so shared links,
-  // bookmarks, and navigation remain useful.
-  const publicRedirects = { '/courses': '/#courses', '/courses.html': '/#courses', '/admission-tracker': '/#admission', '/admission-tracker.html': '/#admission', '/refund': '/refund-policy', '/refund.html': '/refund-policy' };
+  const hostRedirect = canonicalHostRedirect(request);
+  if (hostRedirect) {
+    response.writeHead(301, { location: hostRedirect, 'cache-control': 'public, max-age=86400' });
+    return response.end();
+  }
+  // One permanent public address per page prevents the extensionful legacy
+  // URLs, old resource aliases and shared links from splitting crawl signals
+  // across duplicate content. Keep private paths out of this table: they are
+  // authenticated/noindex routes and must retain their existing navigation.
+  const publicRedirects = {
+    '/courses': '/#courses', '/courses.html': '/#courses',
+    '/admission-tracker': '/#admission', '/admission-tracker.html': '/#admission',
+    '/refund': '/refund-policy', '/refund.html': '/refund-policy',
+    '/resources': '/updates', '/resource-download-hub': '/updates', '/resource-download-hub.html': '/updates',
+    '/index.html': '/',
+    '/academy-services.html': '/academy-services', '/about.html': '/about', '/contact.html': '/contact',
+    '/disclaimer.html': '/disclaimer', '/faculty.html': '/faculty', '/privacy.html': '/privacy',
+    '/refund-policy.html': '/refund-policy', '/terms.html': '/terms', '/updates.html': '/updates',
+    '/nios-admission-2026.html': '/nios-admission-2026',
+    '/nios-class-10-admission.html': '/nios-class-10-admission',
+    '/nios-class-12-admission.html': '/nios-class-12-admission',
+    '/nios-stream-1-block-1-block-2.html': '/nios-stream-1-block-1-block-2',
+    '/nios-subject-selection.html': '/nios-subject-selection',
+    '/nios-solved-tma.html': '/nios-solved-tma', '/nios-hall-ticket.html': '/nios-hall-ticket',
+    '/nios-exam-fees-dates.html': '/nios-exam-fees-dates', '/nios-practical-files.html': '/nios-practical-files',
+    '/nios-previous-year-papers.html': '/nios-previous-year-papers',
+    '/nios-admission-document-checklist.html': '/nios-admission-document-checklist',
+    '/nios-stream-1-vs-stream-2.html': '/nios-stream-1-vs-stream-2',
+    '/nios-practical-examination-guide.html': '/nios-practical-examination-guide',
+    '/nios-april-vs-october-exams.html': '/nios-april-vs-october-exams',
+    '/how-to-select-nios-class-12-subjects.html': '/how-to-select-nios-class-12-subjects',
+    '/how-nios-tma-marks-work.html': '/how-nios-tma-marks-work',
+    '/after-nios-admission-verification.html': '/after-nios-admission-verification',
+    '/ignou-admission-help.html': '/ignou-admission-help',
+    '/cbse-private-candidate-admission.html': '/cbse-private-candidate-admission',
+    '/du-sol-admission.html': '/du-sol-admission'
+  };
   if (publicRedirects[pathname]) {
-    response.writeHead(302, { location: publicRedirects[pathname], 'cache-control': 'no-store' });
+    // Retain analytics parameters without putting them after a hash fragment.
+    // This keeps paid/social attribution intact while search engines receive
+    // a stable permanent canonical URL.
+    let search = '';
+    try { search = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`).search; } catch { /* malformed request URL */ }
+    const [target, fragment] = publicRedirects[pathname].split('#', 2);
+    const location = `${target}${search}${fragment ? `#${fragment}` : ''}`;
+    response.writeHead(301, { location, 'cache-control': 'public, max-age=86400' });
     return response.end();
   }
   // Do not let the Render service hostname publish a competing sitemap or
@@ -1534,7 +1587,7 @@ async function serveStatic(pathname, response, request) {
   if (!searchIndexingAllowed(request) && pathname === '/sitemap.xml') return send(response, 404, { error: 'Not found' });
   // Keep the legacy direct URL on the same clear owner-only staff experience.
   if (pathname === '/admin/staff' || pathname === '/admin-staff.html') pathname = '/admin-staff-v2.html';
-  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/manifest.json': '/student-app.webmanifest', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/resources': '/updates.html', '/resource-download-hub': '/updates.html', '/resource-download-hub.html': '/updates.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html', '/recover-admin': '/recover-admin.html' };
+  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/manifest.json': '/student-app.webmanifest', '/manifest.webmanifest': '/site.webmanifest', '/favicon.ico': '/student-app-icon.svg', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/resources': '/updates.html', '/resource-download-hub': '/updates.html', '/resource-download-hub.html': '/updates.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html', '/recover-admin': '/recover-admin.html' };
   let requested = pathname === '/' ? '/index.html' : (aliases[pathname] || pathname);
   if (!extname(requested)) requested += '.html';
   // Authorize the final resolved page, not just the original URL. Otherwise
