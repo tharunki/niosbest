@@ -43,11 +43,20 @@
       readiness.innerHTML=`<div class="ready">${status('Durable data',Boolean(data.readyForWrites&&r.persistence?.ready),data.readyForWrites?'Supabase state and private file storage are ready.':'Admissions, uploads, and payments stay blocked until this is ready.')}${status('Payments',Boolean(r.payments?.ready),configurationDetail(r.payments))}${status('Email',Boolean(r.email?.ready),configurationDetail(r.email))}${status('Zoom',Boolean(r.zoom?.ready),configurationDetail(r.zoom))}${status('NIOS workflow',Boolean(r.nios?.ready),r.nios?.mode==='manual'?'Manual academy confirmation is active.':configurationDetail(r.nios))}</div>`;
       activity.innerHTML=(data.audit||[]).length?data.audit.slice(0,15).map(item=>`<article class="row"><b>${esc(item.action)}</b><span>${new Date(item.at).toLocaleString()}${item.studentId?' · Student '+esc(item.studentId):''}</span></article>`).join(''):'<div class="empty">No operational events have been recorded yet.</div>';
     }
+    function verifiedSenderDetail(item){
+      const entries=Object.entries(item?.domainVerification||{});
+      if(!entries.length)return '';
+      return ' Sender domains: '+entries.map(([domain,verified])=>`${domain} is ${verified?'verified':'not verified'}`).join('; ')+'.';
+    }
     function diagnosticDetail(item){
-      if(item?.checked===false) return item.nextAction||configurationDetail(item);
-      if(item?.code==='not-configured') return item.nextAction||configurationDetail(item);
-      if(item?.reachable===false||item?.authorized===false) return item.nextAction||'The provider did not accept this verification. Recheck the server-only configuration.';
-      return item?.nextAction||'Connection verified.';
+      let detail;
+      if(item?.checked===false) detail=item.nextAction||configurationDetail(item);
+      else if(item?.code==='not-configured') detail=item.nextAction||configurationDetail(item);
+      else if(item?.reachable===false||item?.authorized===false) detail=item.nextAction||'The provider did not accept this verification. Recheck the server-only configuration.';
+      else detail=item?.nextAction||'Connection verified.';
+      // Domain names and their verified state are safe operational metadata.
+      // Showing them removes guesswork without exposing credentials or mail data.
+      return detail+verifiedSenderDetail(item);
     }
     function renderDiagnostics(data){
       const c=data.checks||{};
