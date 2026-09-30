@@ -5,6 +5,12 @@
   "compatibility_date": "2026-09-27",
   "workers_dev": true,
   "preview_urls": false,
+  "routes": [
+    { "pattern": "tksolutions.in/*", "zone_name": "tksolutions.in" },
+    { "pattern": "www.tksolutions.in/*", "zone_name": "tksolutions.in" },
+    { "pattern": "ravitestpapers.in/*", "zone_name": "ravitestpapers.in" },
+    { "pattern": "www.ravitestpapers.in/*", "zone_name": "ravitestpapers.in" }
+  ],
   "triggers": {
     // 09:00 Asia/Kolkata (03:30 UTC) every day: prunes expired anonymous
     // records and redacts expired unpaid checkout details promptly.
