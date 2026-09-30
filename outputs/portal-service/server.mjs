@@ -417,6 +417,12 @@ const admissionDocumentLimits = Object.freeze({
   all: Object.freeze(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']),
   imageOnly: Object.freeze(['image/jpeg', 'image/png', 'image/webp'])
 });
+// Supabase Storage for this portal is deliberately capped at 6 MiB. The
+// browser sends teacher files inside JSON as base64, so reserve enough space
+// for the encoded content and small metadata fields without accepting a
+// larger binary file than the storage bucket permits.
+const teacherMaterialMaximumBytes = 6 * 1024 * 1024;
+const teacherMaterialMaximumRequestBytes = 4 * Math.ceil(teacherMaterialMaximumBytes / 3) + 64 * 1024;
 const requiredAdmissionDocuments = Object.freeze([
   {
     type: 'IDENTITY', label: 'Identity proof', required: true,
@@ -844,11 +850,11 @@ function send(response, status, body, headers = {}) {
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers }); response.end(JSON.stringify(body));
 }
 async function rawBody(request, maxBytes = 9_000_000) {
-  const chunks = []; let size = 0; for await (const chunk of request) { chunks.push(chunk); size += chunk.length; if (size > maxBytes) throw new Error('Request body is too large.'); }
+  const chunks = []; let size = 0; for await (const chunk of request) { chunks.push(chunk); size += chunk.length; if (size > maxBytes) throw Object.assign(new Error('Request body is too large.'), { status: 413 }); }
   return Buffer.concat(chunks);
 }
-async function body(request) {
-  const raw = await rawBody(request);
+async function body(request, maxBytes) {
+  const raw = await rawBody(request, maxBytes);
   if (!raw.length) return {}; try { return JSON.parse(raw.toString('utf8')); } catch { throw new Error('Invalid JSON request body.'); }
 }
 // A small process-local throttle is deliberately conservative: it protects
@@ -1124,10 +1130,24 @@ function studentSubjectsForEnrollment(student, enrollment, state) {
 }
 function forEnrollment(item, enrollment, state) { const batch = state?.batches?.find(record => record.id === enrollment.batchId); const inBatch = batch && item.batchId === enrollment.batchId && item.board === enrollment.board && item.classLevel === enrollment.classLevel && item.stream === enrollment.stream; const selected = Array.isArray(enrollment.selectedSubjects) ? enrollment.selectedSubjects : []; const batchAllowsSubject = Boolean(batch?.subjects?.some(subject => String(subject.code) === String(item.subjectCode) && String(subject.name) === String(item.subject))); return !item.restricted && inBatch && batchAllowsSubject && selected.some(subject => String(subject.code) === String(item.subjectCode) && String(subject.name) === String(item.subject)); }
 function publicEnrollment(enrollment, state) { const { applicantDateOfBirth, guardianConfirmation, guardianConfirmedAt, guardianName, guardianEmail, guardianPhone, intakeNotice, ...safe } = enrollment; const batch = state.batches.find(item => item.id === enrollment.batchId); return { ...safe, batch: batch ? { id: batch.id, name: batch.name, stream: batch.stream, streamId: batch.streamId } : null, contentAccess: enrollment.status === 'ACTIVE' }; }
+function isBase64Payload(value) {
+  if (!value || value.length % 4 !== 0) return false;
+  const firstPadding = value.indexOf('=');
+  const contentEnd = firstPadding < 0 ? value.length : firstPadding;
+  const paddingLength = value.length - contentEnd;
+  if (paddingLength > 2) return false;
+  for (let index = 0; index < contentEnd; index += 1) {
+    const code = value.charCodeAt(index);
+    const alphaNumeric = (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+    if (!alphaNumeric && code !== 43 && code !== 47) return false;
+  }
+  for (let index = contentEnd; index < value.length; index += 1) if (value.charCodeAt(index) !== 61) return false;
+  return true;
+}
 function filePayload(input, maxBytes = 6 * 1024 * 1024) {
   const fileName = String(input.fileName || '').trim(), mimeType = String(input.mimeType || '').trim(), base64 = String(input.base64 || '').replace(/^data:[^;]+;base64,/, '');
-  if (!isSafeString(fileName, 140) || !['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) throw Object.assign(new Error('Provide a PDF, JPG, PNG, or WEBP file.'), { status: 422 });
-  const bytes = Buffer.from(base64, 'base64'); if (!bytes.length || bytes.length > maxBytes) throw Object.assign(new Error(`File must be smaller than ${Math.floor(maxBytes / 1024 / 1024)} MB.`), { status: 422 });
+  if (!isSafeString(fileName, 140) || !['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(mimeType) || !isBase64Payload(base64)) throw Object.assign(new Error('Provide a PDF, JPG, PNG, or WEBP file.'), { status: 422 });
+  const bytes = Buffer.from(base64, 'base64'); if (!bytes.length || bytes.length > maxBytes) throw Object.assign(new Error(`File must be ${Math.floor(maxBytes / 1024 / 1024)} MB or smaller.`), { status: 422 });
   if (detectedUploadMime(bytes) !== mimeType) throw Object.assign(new Error('The file contents do not match the selected file type.'), { status: 422 });
   return { fileName: fileName.replace(/[^a-zA-Z0-9._ -]/g, '_'), mimeType, bytes };
 }
@@ -1311,7 +1331,7 @@ async function serveStatic(pathname, response, request) {
   if (!searchIndexingAllowed(request) && pathname === '/sitemap.xml') return send(response, 404, { error: 'Not found' });
   // Keep the legacy direct URL on the same clear owner-only staff experience.
   if (pathname === '/admin/staff' || pathname === '/admin-staff.html') pathname = '/admin-staff-v2.html';
-  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
+  const aliases = { '/dashboard': '/active-student-dashboard.html', '/student-desk': '/active-student-dashboard.html', '/student-desk.html': '/active-student-dashboard.html', '/student-app': '/student-app.html', '/manifest.json': '/student-app.webmanifest', '/admission-intake': '/admission-wizard-v2.html', '/admission-intake.html': '/admission-wizard-v2.html', '/application-wizard.html': '/admission-wizard-v2.html', '/resources': '/updates.html', '/resource-download-hub': '/updates.html', '/resource-download-hub.html': '/updates.html', '/admin': '/admission-admin.html', '/admin/admissions': '/admission-admin.html', '/admin-dashboard.html': '/admission-admin.html', '/admin/batches': '/admin-batches.html', '/admin/materials': '/admin-materials.html', '/admin-resources.html': '/admin-materials.html', '/admin/staff': '/admin-staff.html', '/admin/student-access': '/admin-student-access.html', '/admin/operations': '/admin-health.html', '/admin-operations.html': '/admin-health.html', '/teacher-portal': '/teacher-portal-v2.html', '/teacher-portal.html': '/teacher-portal-v2.html', '/live-classes': '/batch-hub.html', '/homework': '/batch-hub.html', '/checkout': '/checkout-v2.html', '/checkout.html': '/checkout-v2.html', '/login': '/auth-v2.html', '/auth.html': '/auth-v2.html', '/accept-invite': '/accept-invite.html' };
   let requested = pathname === '/' ? '/index.html' : (aliases[pathname] || pathname);
   if (!extname(requested)) requested += '.html';
   // Authorize the final resolved page, not just the original URL. Otherwise
@@ -1854,7 +1874,7 @@ const server = createServer(async (request, response) => {
       const created = await updateState(data => { const item = { id: uid('homework'), ...target, title, instructions, dueAt, createdBy: staff.sub, createdAt: now() }; data.homework.push(item); data.audit.push({ id: uid('audit'), at: now(), action: 'homework.created', batchId: item.batchId, homeworkId: item.id, staffId: staff.sub }); return item; }); return send(response, 201, created);
     }
     if (method === 'POST' && path === '/api/teacher/materials') {
-      const input = await body(request), state = await readState(), target = targetForBatch(input, state), staff = requireTeacherPermission(request, state, 'manageMaterials', target.batchId), title = String(input.title || '').trim(), materialType = String(input.materialType || 'Class note').trim(), file = filePayload(input, 8 * 1024 * 1024);
+      const input = await body(request, teacherMaterialMaximumRequestBytes), state = await readState(), target = targetForBatch(input, state), staff = requireTeacherPermission(request, state, 'manageMaterials', target.batchId), title = String(input.title || '').trim(), materialType = String(input.materialType || 'Class note').trim(), file = filePayload(input, teacherMaterialMaximumBytes);
       if (!isSafeString(title, 140) || !['Class note', 'TMA solution', 'Practical guide', 'Recorded session'].includes(materialType)) return send(response, 422, { error: 'Use a title and valid material type.' });
       const storageKey = `materials/${target.batchId}/${target.subjectCode}/${Date.now()}-${file.fileName}`; await storage.put(storageKey, file.bytes, file.mimeType);
       const created = await updateState(data => { const item = { id: uid('material'), ...target, title, materialType, fileName: file.fileName, mimeType: file.mimeType, storageKey, createdBy: staff.sub, createdAt: now() }; data.materials.push(item); data.audit.push({ id: uid('audit'), at: now(), action: 'material.uploaded', batchId: item.batchId, materialId: item.id, staffId: staff.sub }); return item; }); return send(response, 201, { ...created, downloadable: true });

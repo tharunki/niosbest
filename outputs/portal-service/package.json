@@ -10,8 +10,9 @@
     "test:state": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs",
     "test:auth": "node qa/email-verification.test.mjs && node qa/email-verification-delivery-failure.test.mjs",
     "test:diagnostics": "node qa/integration-diagnostics.test.mjs",
+    "test:teacher-materials": "node qa/teacher-material-upload.test.mjs",
     "test:mira": "node qa/counselor.test.mjs && node qa/mira-client.test.mjs && node --check ../student-assistant.js && node --check ../student-app.js",
-    "test:release": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs && node qa/email-verification.test.mjs && node qa/email-verification-delivery-failure.test.mjs && node qa/admission-documents.test.mjs && node qa/release-security.test.mjs && node qa/integration-diagnostics.test.mjs && node qa/canonical-seo-gate.test.mjs && node qa/counselor.test.mjs && node qa/mira-client.test.mjs && node --check ../student-assistant.js && node --check ../student-app.js"
+    "test:release": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs && node qa/email-verification.test.mjs && node qa/email-verification-delivery-failure.test.mjs && node qa/admission-documents.test.mjs && node qa/teacher-material-upload.test.mjs && node qa/release-security.test.mjs && node qa/integration-diagnostics.test.mjs && node qa/canonical-seo-gate.test.mjs && node qa/counselor.test.mjs && node qa/mira-client.test.mjs && node --check ../student-assistant.js && node --check ../student-app.js"
   },
   "engines": {
     "node": ">=20"
