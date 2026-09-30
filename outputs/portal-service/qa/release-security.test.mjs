@@ -105,6 +105,9 @@ try {
   const recoveryPage = await page('/recover-admin');
   assert.equal(recoveryPage.response.status, 200);
   assert.match(recoveryPage.body, /OWNER ACCOUNT RECOVERY/);
+  assert.match(recoveryPage.body, /id="submit" disabled/, 'owner reset must stay disabled until a secure fragment handoff creates a recovery session');
+  assert.match(recoveryPage.body, /let recoverySessionReady=false/, 'the page must track the verified recovery session explicitly');
+  assert.match(recoveryPage.body, /Open a fresh secure recovery link to continue\./, 'a bare or expired recovery page must guide the owner instead of submitting an invalid reset');
   assert.match(String(recoveryPage.response.headers.get('cache-control')), /private, no-store/, 'the recovery form must never be shared from a cache');
   assert.match(String(recoveryPage.response.headers.get('x-robots-tag')), /noindex/i, 'the recovery form must not be indexed');
   const disabledRecovery = await api('/api/auth/admin-recovery', { method: 'POST', body: { email: 'niosbest.tvl@gmail.com', token: 'x'.repeat(43), password: 'owner-recovery-password', passwordConfirmation: 'owner-recovery-password' } });
