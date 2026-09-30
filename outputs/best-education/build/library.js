@@ -234,6 +234,35 @@ function purchaseAction(card, fallbackPrice, unitLabel) {
   return `<span class="price">₹${escapeHTML(card.price || fallbackPrice)}<small>${escapeHTML(unitLabel)}</small></span><a class="button" href="${productLink(card.slug)}">View details</a>`;
 }
 
+// A card created in the admin can have a descriptive title rather than the
+// generated legacy slug. For example, "Class 10 Science – Chemical Reactions
+// & Equations: 103 Important Questions" still belongs in the Chemical
+// Reactions and Equations lesson slot. Normalize only for matching; the
+// original title remains what students see.
+function lessonMatchText(value = '') {
+  return String(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[’']/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function cardForLesson(cards, lesson, legacySlug) {
+  // Preserve the legacy exact-slug behaviour first, then recognise an admin
+  // title that contains the full verified lesson name.
+  const legacyCard = cards.find((card) => card.slug === legacySlug);
+  if (legacyCard) return legacyCard;
+
+  const lessonText = lessonMatchText(lesson);
+  if (!lessonText) return null;
+  const phrase = ` ${lessonText} `;
+  return cards.find((card) => ` ${lessonMatchText(card.title)} `.includes(phrase)) || null;
+}
+
 function renderLessons() {
   const lessons = catalog[selectedClass]?.[selectedSubject] || [];
   const subjectCards = classCards.filter((card) => card.type === type && card.className === selectedClass && card.subject === selectedSubject);
@@ -250,18 +279,18 @@ function renderLessons() {
   if (!lessons.length && !allCustomCards.length) {
     grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${escapeHTML(selectedSubject)} is not published yet.</strong>TK's SOLUTION will add the exact lesson list and PDFs after they are verified.</div>`;
   } else {
-    const standardSlugs = new Set();
+    const lessonCards = new Set();
     const standardCards = lessons.map((lesson, index) => {
       const slug = `${type}-class-${selectedClass}-${selectedSubject}-${lesson}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-      standardSlugs.add(slug);
-      const sourceCard = allCustomCards.find((card) => card.slug === slug);
+      const sourceCard = cardForLesson(allCustomCards, lesson, slug);
+      if (sourceCard) lessonCards.add(sourceCard);
       if (selectedTags.size && (!sourceCard || !hasSelectedTags(sourceCard))) return '';
       const custom = sourceCard && hasSelectedTags(sourceCard) ? sourceCard : null;
       const title = custom?.title || lesson;
       const description = custom?.description || `${labels[type]} PDF · chapter-wise practice`;
       return `<article class="lesson"><span class="chapter">Lesson ${index + 1} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(title)}</h3><p>${escapeHTML(description)}</p>${cardTagMarkup(custom)}<div class="buy">${purchaseAction(custom, '39', 'per lesson PDF')}</div></article>`;
     }).join('');
-    const addedCards = customCards.filter((card) => !standardSlugs.has(card.slug)).map((card) => {
+    const addedCards = customCards.filter((card) => !lessonCards.has(card)).map((card) => {
       return `<article class="lesson"><span class="chapter">${escapeHTML(labels[type])} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || `${labels[type]} practice material`)}</p>${cardTagMarkup(card)}<div class="buy">${purchaseAction(card, '39', 'per PDF')}</div></article>`;
     }).join('');
     const resources = standardCards + addedCards;
