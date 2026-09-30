@@ -169,6 +169,24 @@ function subjectsForSelectedClass() {
   return [...new Set([...verifiedSubjects, ...publishedSubjects])];
 }
 
+// `/api/cards` deliberately returns only cards that are published and visible
+// to students. `available` has a narrower meaning: a card has a protected PDF
+// and secure checkout is currently open. Keep those ideas separate so a
+// published bundle is never hidden merely because sales are paused.
+function publishedResourceLabel(cards) {
+  const count = cards.length;
+  const bundleCount = cards.filter((card) => card.isBundle).length;
+  if (!count) return 'No published resources listed yet';
+  if (bundleCount === count) return `${count} published full-course bundle${count === 1 ? '' : 's'} listed`;
+  return `${count} published study resource${count === 1 ? '' : 's'} listed`;
+}
+
+function checkoutStatus(cards) {
+  const readyCount = cards.filter((card) => card.available).length;
+  if (!readyCount) return 'Secure checkout opens soon.';
+  return `${readyCount} resource${readyCount === 1 ? '' : 's'} ready for secure checkout.`;
+}
+
 async function loadClassCards() {
   const requestId = ++classRequestId;
   const requestedClass = selectedClass;
@@ -213,11 +231,12 @@ function renderSubjects() {
     bundle.textContent = 'Full bundle coming soon';
     return;
   }
-  courseNote.textContent = `Class ${selectedClass}: choose a subject to see its lesson list and released PDFs.`;
+  courseNote.textContent = `Class ${selectedClass}: choose a subject to see its lesson list and published resources. Secure checkout is shown separately.`;
   grid.innerHTML = subjects.map((subject) => {
     const lessonCount = (catalog[selectedClass]?.[subject] || []).length;
-    const releasedCount = classCards.filter((card) => card.type === type && card.className === selectedClass && card.subject === subject && card.available).length;
-    const detail = lessonCount ? `${lessonCount} verified lesson titles${releasedCount ? ` · ${releasedCount} PDF${releasedCount === 1 ? '' : 's'} released` : ' · PDFs released as published'}` : `${releasedCount} PDF${releasedCount === 1 ? '' : 's'} released`;
+    const subjectCards = classCards.filter((card) => card.type === type && card.className === selectedClass && card.subject === subject);
+    const listedResources = publishedResourceLabel(subjectCards);
+    const detail = lessonCount ? `${lessonCount} verified lesson titles · ${listedResources}` : listedResources;
     return `<button class="subject-card" type="button" data-subject="${escapeHTML(subject)}"><span class="chapter">Class ${escapeHTML(selectedClass)}</span><strong>${escapeHTML(subject)}</strong><small>${escapeHTML(detail)} →</small></button>`;
   }).join('');
   grid.querySelectorAll('[data-subject]').forEach((button) => button.addEventListener('click', () => {
@@ -230,7 +249,10 @@ function renderSubjects() {
 }
 
 function purchaseAction(card, fallbackPrice, unitLabel) {
-  if (!card?.available) return '<span class="coming-soon">Coming soon</span>';
+  if (!card) return '<span class="coming-soon">Coming soon</span>';
+  if (!card.available) {
+    return `<span class="coming-soon">Published · secure checkout opens soon</span><a class="button" href="${productLink(card.slug)}">View details</a>`;
+  }
   return `<span class="price">₹${escapeHTML(card.price || fallbackPrice)}<small>${escapeHTML(unitLabel)}</small></span><a class="button" href="${productLink(card.slug)}">View details</a>`;
 }
 
@@ -268,15 +290,15 @@ function renderLessons() {
   const subjectCards = classCards.filter((card) => card.type === type && card.className === selectedClass && card.subject === selectedSubject);
   const allCustomCards = subjectCards.filter((card) => !card.isBundle);
   const bundleCard = subjectCards.find((card) => card.isBundle);
-  const releasedCount = subjectCards.filter((card) => card.available).length;
-  const filterTags = availableTags(allCustomCards);
+  const filterTags = availableTags(subjectCards);
   selectedTags = new Set([...selectedTags].filter((tag) => filterTags.some((item) => item.toLocaleLowerCase() === tag)));
   const customCards = allCustomCards.filter(hasSelectedTags);
-  courseNote.textContent = releasedCount
-    ? `Class ${selectedClass} · ${selectedSubject}. Select a released PDF for secure purchase.`
+  const listedResources = publishedResourceLabel(subjectCards);
+  courseNote.textContent = subjectCards.length
+    ? `Class ${selectedClass} · ${selectedSubject}. ${listedResources}. ${checkoutStatus(subjectCards)}`
     : `Class ${selectedClass} · ${selectedSubject}. This catalogue is released only when its secure PDF is ready.`;
   const toolbar = `<div class="lesson-toolbar"><span class="chapter">Class ${escapeHTML(selectedClass)} · ${escapeHTML(selectedSubject)}</span><button class="back-subjects" type="button">← All subjects</button></div>`;
-  if (!lessons.length && !allCustomCards.length) {
+  if (!lessons.length && !allCustomCards.length && !bundleCard) {
     grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${escapeHTML(selectedSubject)} is not published yet.</strong>TK's SOLUTION will add the exact lesson list and PDFs after they are verified.</div>`;
   } else {
     const lessonCards = new Set();
@@ -293,14 +315,20 @@ function renderLessons() {
     const addedCards = customCards.filter((card) => !lessonCards.has(card)).map((card) => {
       return `<article class="lesson"><span class="chapter">${escapeHTML(labels[type])} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || `${labels[type]} practice material`)}</p>${cardTagMarkup(card)}<div class="buy">${purchaseAction(card, '39', 'per PDF')}</div></article>`;
     }).join('');
-    const resources = standardCards + addedCards;
+    const bundleMatchesTags = bundleCard && hasSelectedTags(bundleCard);
+    const bundleMarkup = bundleMatchesTags
+      ? `<article class="lesson"><span class="chapter">Full course bundle · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(bundleCard.title)}</h3><p>${escapeHTML(bundleCard.description || `${labels[type]} complete course bundle`)}</p>${cardTagMarkup(bundleCard)}<div class="buy">${purchaseAction(bundleCard, '399', 'full course bundle')}</div></article>`
+      : '';
+    const resources = standardCards + addedCards + bundleMarkup;
     const noMatches = !resources ? '<div class="empty-library"><strong>No materials match those topic filters.</strong>Clear a filter to see the complete lesson list.</div>' : '';
     grid.innerHTML = toolbar + tagFilterMarkup(filterTags) + resources + noMatches;
   }
   grid.querySelector('.back-subjects')?.addEventListener('click', renderSubjects);
   bindTagFilters();
-  bundle.href = bundleCard?.available ? productLink(bundleCard.slug) : '#library-grid';
-  bundle.textContent = bundleCard?.available ? `View full bundle · ₹${bundleCard.price || '399'}` : 'Full bundle coming soon';
+  bundle.href = bundleCard ? productLink(bundleCard.slug) : '#library-grid';
+  bundle.textContent = bundleCard
+    ? (bundleCard.available ? `View full bundle · ₹${bundleCard.price || '399'}` : `View full bundle details · ₹${bundleCard.price || '399'}`)
+    : 'Full bundle coming soon';
 }
 
 classButtons.forEach((button) => button.addEventListener('click', () => {
