@@ -115,6 +115,15 @@
     .alert { margin-top:15px; padding:13px; border:1px solid rgba(85,217,208,.16); border-radius:13px; color:#cae7e3; background:rgba(85,217,208,.08); font-size:11px; }
     .alert b { color:var(--aqua); }
     .footer { padding:44px 0 19px; border-top:1px solid rgba(202,197,255,.11); }
+    .guide-hub { padding:0 0 66px; }
+    .guide-hub__panel { padding:25px; border:1px solid var(--border); border-radius:20px; background:linear-gradient(135deg,rgba(34,32,96,.72),rgba(20,39,78,.52)); }
+    .guide-hub__panel h2 { margin:0; font:600 26px/1.12 "Plus Jakarta Sans",sans-serif; letter-spacing:-.055em; }
+    .guide-hub__panel > p { max-width:730px; margin:9px 0 23px; color:var(--muted); font-size:12px; }
+    .guide-groups { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:13px; }
+    .guide-group { padding:16px; border:1px solid rgba(202,197,255,.13); border-radius:15px; background:rgba(8,8,38,.24); }
+    .guide-group h3 { margin:0 0 7px; color:var(--violet-soft); font:700 12px "Plus Jakarta Sans",sans-serif; letter-spacing:.04em; text-transform:uppercase; }
+    .guide-group a { display:block; padding:6px 0; color:#e3e0f5; font-size:12px; line-height:1.35; }
+    .guide-group a:hover,.guide-group a:focus { color:var(--aqua); text-decoration:underline; text-underline-offset:3px; }
     .footer-main { display:flex; align-items:center; justify-content:space-between; gap:22px; }
     .footer p { max-width:410px; margin:14px 0 0; color:var(--muted); font-size:11px; }
     .footer-links { display:flex; flex-wrap:wrap; gap:15px; }
@@ -124,9 +133,9 @@
     .toast.show { opacity:1; transform:none; }
     .toast i { margin-right:6px; color:var(--aqua); font-style:normal; }
     @media (max-width:1050px) { .resource-cards { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-    @media (max-width:900px) { .main-grid { grid-template-columns:1fr; } .downloads { position:static; } }
+    @media (max-width:900px) { .main-grid { grid-template-columns:1fr; } .downloads { position:static; } .guide-groups { grid-template-columns:repeat(2,minmax(0,1fr)); } }
     @media (max-width:700px) { .wrap { width:min(100% - 32px,620px); } .topbar { height:67px; } .nav { display:none; } .mobile-nav { display:block; position:relative; } .mobile-nav summary { display:flex; align-items:center; gap:6px; padding:8px 9px; border:1px solid var(--border); border-radius:10px; background:rgba(255,255,255,.04); font-size:10px; font-weight:800; cursor:pointer; list-style:none; } .mobile-nav summary::-webkit-details-marker { display:none; } .mobile-nav[open] summary { border-color:rgba(182,172,255,.7); background:rgba(137,119,255,.15); } .mobile-links { position:absolute; z-index:40; top:42px; right:0; display:grid; width:205px; gap:2px; padding:8px; border:1px solid var(--border); border-radius:14px; background:#171541; box-shadow:var(--shadow); } .mobile-links a { padding:10px; border-radius:8px; color:#dedbf4; font-size:12px; } .mobile-links a:hover,.mobile-links a:focus { color:#fff; outline:0; background:rgba(137,119,255,.19); } .hero { padding:48px 0 28px; } .hero h1 { font-size:37px; } .hub { padding:16px; } .resource-section { padding:16px; } .resource-section__header { align-items:stretch; flex-direction:column; gap:11px; } .class-control { justify-content:space-between; } .class-control select { width:100%; max-width:180px; } .footer-main { align-items:start; flex-direction:column; } .login { display:none; } }
-    @media (max-width:460px) { .brand-copy > span { display:none; } .topbar .wrap { gap:12px; } .enroll { padding:9px 10px; font-size:10px; } .resource-cards { grid-template-columns:1fr; } .resource-card { min-height:164px; } .stats { gap:6px; } .stat { padding:7px 9px; } }
+    @media (max-width:460px) { .brand-copy > span { display:none; } .topbar .wrap { gap:12px; } .enroll { padding:9px 10px; font-size:10px; } .resource-cards { grid-template-columns:1fr; } .resource-card { min-height:164px; } .stats { gap:6px; } .stat { padding:7px 9px; } .guide-hub__panel { padding:18px; } .guide-groups { grid-template-columns:1fr; } }
     @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } *,*::before,*::after { scroll-behavior:auto!important; transition-duration:.01ms!important; animation-duration:.01ms!important; animation-iteration-count:1!important; } }
   </style>
   <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"EducationalOrganization","@id":"https://niosbest.in/#organization","name":"NIOS Best Academy","url":"https://niosbest.in","description":"Independent open-schooling and distance-education coaching and counselling provider."},{"@type":"WebSite","@id":"https://niosbest.in/#website","name":"NIOS Best Academy","url":"https://niosbest.in","publisher":{"@id":"https://niosbest.in/#organization"}},{"@type":"CollectionPage","@id":"https://niosbest.in/updates#webpage","url":"https://niosbest.in/updates","name":"NIOS Solved TMA, Study Material & PYQ Resources","description":"Browse subject-wise NIOS solved TMAs, study materials and previous-year question papers for Class 10 and Class 12.","isPartOf":{"@id":"https://niosbest.in/#website"},"publisher":{"@id":"https://niosbest.in/#organization"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://niosbest.in"},{"@type":"ListItem","position":2,"name":"Resources","item":"https://niosbest.in/updates"}]}]}</script>
@@ -168,6 +177,47 @@
         <div class="download-grid" id="downloads"></div>
         <div class="alert"><b>Need a deadline reminder?</b> Create a student account to keep your study plan and saved resources together.</div>
       </aside>
+    </section>
+
+    <section class="wrap guide-hub" aria-labelledby="studentGuidesHeading">
+      <div class="guide-hub__panel">
+        <p class="eyebrow">STUDENT GUIDES</p>
+        <h2 id="studentGuidesHeading">Clear NIOS guidance for each next step</h2>
+        <p>Use these independent guides to prepare questions for your counsellor and to understand the official process. Always verify dates, fees and final eligibility on the relevant official board website before you apply.</p>
+        <div class="guide-groups">
+          <section class="guide-group" aria-labelledby="admissionGuidesHeading">
+            <h3 id="admissionGuidesHeading">Admissions</h3>
+            <a href="/nios-admission-2026">NIOS admission 2026 guide</a>
+            <a href="/nios-class-10-admission">NIOS Class 10 admission</a>
+            <a href="/nios-class-12-admission">NIOS Class 12 admission</a>
+            <a href="/nios-stream-1-block-1-block-2">Stream 1 Block 1 and Block 2</a>
+            <a href="/nios-stream-1-vs-stream-2">Stream 1 versus Stream 2</a>
+            <a href="/nios-on-demand-exam">NIOS On-Demand Examination</a>
+            <a href="/nios-transfer-of-credit">NIOS Transfer of Credit</a>
+          </section>
+          <section class="guide-group" aria-labelledby="studyGuidesHeading">
+            <h3 id="studyGuidesHeading">Subjects and study</h3>
+            <a href="/nios-subject-selection">NIOS subject selection</a>
+            <a href="/how-to-select-nios-class-12-subjects">How to select Class 12 subjects</a>
+            <a href="/nios-solved-tma">NIOS solved TMA resources</a>
+            <a href="/how-nios-tma-marks-work">How NIOS TMA marks work</a>
+            <a href="/nios-previous-year-papers">NIOS previous-year papers</a>
+            <a href="/nios-practical-files">NIOS practical files</a>
+            <a href="/nios-practical-examination-guide">NIOS practical examination guide</a>
+          </section>
+          <section class="guide-group" aria-labelledby="supportGuidesHeading">
+            <h3 id="supportGuidesHeading">Dates and support</h3>
+            <a href="/nios-admission-document-checklist">NIOS admission document checklist</a>
+            <a href="/nios-hall-ticket">NIOS hall ticket help</a>
+            <a href="/nios-exam-fees-dates">NIOS exam fees and dates</a>
+            <a href="/nios-april-vs-october-exams">April versus October exams</a>
+            <a href="/after-nios-admission-verification">After admission verification</a>
+            <a href="/ignou-admission-help">IGNOU admission help</a>
+            <a href="/cbse-private-candidate-admission">CBSE private candidate admission</a>
+            <a href="/du-sol-admission">DU SOL admission</a>
+          </section>
+        </div>
+      </div>
     </section>
   </main>
 
