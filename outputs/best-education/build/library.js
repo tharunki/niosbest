@@ -22,6 +22,13 @@ if (!document.querySelector('script[src="analytics.js"]')) {
   document.head.append(analytics);
 }
 
+if (!document.querySelector('link[href="accessibility.css"]')) {
+  const accessibility = document.createElement('link');
+  accessibility.rel = 'stylesheet';
+  accessibility.href = 'accessibility.css';
+  document.head.append(accessibility);
+}
+
 const labels = { sample: 'Sample Paper', pyq: 'Previous Year Questions', mcq: 'MCQ Practice Set', important: 'Important Questions' };
 const slugs = { sample: 'sample-papers.html', pyq: 'pyqs.html', mcq: 'mcqs.html', important: 'important-questions.html' };
 const seoTitle = `${labels[type]} for Classes 10, 11 & 12 | TK's SOLUTION`;
@@ -59,6 +66,12 @@ document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img
 const grid = document.querySelector('#library-grid');
 const courseNote = document.querySelector('#course-note');
 const bundle = document.querySelector('#bundle-button');
+const classButtons = [...document.querySelectorAll('[data-class]')];
+grid?.setAttribute('aria-live', 'polite');
+courseNote?.setAttribute('role', 'status');
+courseNote?.setAttribute('aria-live', 'polite');
+document.querySelector('.grade-picker')?.setAttribute('role', 'group');
+document.querySelector('.grade-picker')?.setAttribute('aria-label', 'Choose class');
 bundle.removeAttribute('target');
 bundle.removeAttribute('rel');
 let selectedClass = '10';
@@ -71,6 +84,15 @@ const CLASS_REQUEST_TIMEOUT_MS = 12_000;
 
 function escapeHTML(value = '') {
   return String(value).replace(/[&<>'"]/g, (character) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[character]);
+}
+
+function updateClassControls() {
+  classButtons.forEach((button) => {
+    const selected = button.dataset.class === selectedClass;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+    button.setAttribute('aria-controls', 'library-grid');
+  });
 }
 
 function productLink(slug) { return slug ? `/paper/${encodeURIComponent(slug)}` : '#library-grid'; }
@@ -252,14 +274,15 @@ function renderLessons() {
   bundle.textContent = bundleCard?.available ? `View full bundle · ₹${bundleCard.price || '399'}` : 'Full bundle coming soon';
 }
 
-document.querySelectorAll('[data-class]').forEach((button) => button.addEventListener('click', () => {
+classButtons.forEach((button) => button.addEventListener('click', () => {
   selectedClass = button.dataset.class;
   selectedSubject = null;
   classCards = [];
-  document.querySelectorAll('[data-class]').forEach((item) => item.classList.toggle('active', item === button));
+  updateClassControls();
   renderSubjects();
   void loadClassCards();
 }));
 
+updateClassControls();
 renderSubjects();
 void loadClassCards();

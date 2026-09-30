@@ -9,6 +9,7 @@ let searchTimer;
 let activeSearchRequest;
 let searchRequestId = 0;
 const SEARCH_REQUEST_TIMEOUT_MS = 12_000;
+const prefersReducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 function closeMenu() { nav?.classList.remove('open'); menuButton?.setAttribute('aria-expanded', 'false'); menuButton?.setAttribute('aria-label', 'Open menu'); }
 menuButton?.addEventListener('click', () => { const isOpen = nav.classList.toggle('open'); menuButton.setAttribute('aria-expanded', String(isOpen)); menuButton.setAttribute('aria-label', isOpen ? 'Close menu' : 'Open menu'); });
@@ -122,10 +123,10 @@ async function runSearch({ scroll = false } = {}) {
   if (!term) { const papers = await fetchPapers('', true); if (papers !== null) searchStatus.textContent = 'Enter a class, subject, or chapter name.'; return; }
   searchStatus.textContent = 'Searching study material…'; const papers = await fetchPapers(term);
   if (papers === null) return;
-  if (papers.length && scroll) document.querySelector('#latest')?.scrollIntoView({ behavior:'smooth', block:'start' });
+  if (papers.length && scroll) document.querySelector('#latest')?.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block:'start' });
   if (!papers.length) {
     const matchingResource = [...document.querySelectorAll('.resource-card')].find(card => card.dataset.keywords.toLowerCase().includes(term.toLowerCase()));
-    if (matchingResource) { searchStatus.textContent = 'A matching resource category was found.'; matchingResource.scrollIntoView({ behavior:'smooth', block:'center' }); matchingResource.focus(); }
+    if (matchingResource) { searchStatus.textContent = 'A matching resource category was found.'; matchingResource.scrollIntoView({ behavior: prefersReducedMotion ? 'auto' : 'smooth', block:'center' }); matchingResource.focus(); }
   }
 }
 searchButton?.addEventListener('click', () => { clearTimeout(searchTimer); runSearch({ scroll:true }); });

@@ -50,9 +50,10 @@ This is the version to use for a low-cost launch. The Worker source is in `cloud
    npx wrangler secret put RAZORPAY_KEY_ID
    npx wrangler secret put RAZORPAY_KEY_SECRET
    npx wrangler secret put RAZORPAY_WEBHOOK_SECRET
+   npx wrangler secret put PAYMENTS_ENABLED
    ```
 
-   Use a unique admin password of at least 12 characters and a separate random download secret of at least 32 characters. Start with Razorpay **Test** keys.
+   Use a unique admin password of at least 12 characters and a separate random download secret of at least 32 characters. Start with Razorpay **Test** keys. Enter `false` for `PAYMENTS_ENABLED` while setting up the site: PDFs stay visible as “coming soon” and cannot be bought until this deliberate sales switch is changed to `true`.
 
 6. Deploy with `npx wrangler deploy`. Test the temporary `workers.dev` address first. It is deliberately marked `noindex`, so it will not compete with the final site in search results.
 7. After testing the admin upload, a test purchase, a verified download, and the Razorpay webhook, attach the final custom domain and replace test Razorpay credentials with Live credentials. Set the webhook endpoint to:
@@ -61,7 +62,7 @@ This is the version to use for a low-cost launch. The Worker source is in `cloud
    https://YOUR-FINAL-DOMAIN/api/payment/webhook
    ```
 
-   Subscribe Razorpay to `payment.captured` and `payment.failed`.
+   Subscribe Razorpay to `payment.captured` and `payment.failed`. Test one final purchase and download with the Live configuration, then set `PAYMENTS_ENABLED` to `true` **last**. This switch controls the public buy buttons, product indexing and checkout, so leaving it absent or `false` keeps sales safely closed.
 
 The Workers, D1 and R2 included free allowances are generous for a new study-material site, but R2 is usage-billed after its free allowance and Cloudflare may require a billing profile/card even when monthly usage remains ₹0. Add a Cloudflare budget alert before opening sales. The free Worker upload route is suitable for the current chapter PDFs; upload very large bundle PDFs only after testing because Workers Free has a small CPU limit.
 

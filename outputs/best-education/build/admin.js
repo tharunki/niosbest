@@ -1601,7 +1601,15 @@ $('#import-data').addEventListener('change', async event => {
   if (!file) return;
   try {
     const data = JSON.parse(await file.text());
-    const result = await request('/api/admin/import', { method: 'PUT', body: JSON.stringify(data) });
+    const confirmed = window.confirm('Replace the full library with this backup? This permanently replaces every current study card and library section. Export a fresh backup first if you may need the current content.');
+    if (!confirmed) {
+      showToast('Import cancelled. Your library was not changed.');
+      return;
+    }
+    const replacement = Array.isArray(data)
+      ? { cards: data, confirmReplace: true }
+      : { ...data, confirmReplace: true };
+    const result = await request('/api/admin/import', { method: 'PUT', body: JSON.stringify(replacement) });
     await Promise.all([loadCards(), loadSections()]);
     status.textContent = `${result.count} study cards imported.`;
     showToast(`${result.count} study cards imported.`);

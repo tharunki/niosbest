@@ -141,13 +141,21 @@ function hasConfiguredSecret(value, minimumLength = 1) {
   return typeof value === 'string' && value.trim().length >= minimumLength;
 }
 
+// This is a deliberate launch switch rather than an inferred state. A bucket
+// and test credentials can be present while the public site is still being
+// checked, so no student should see a purchasable resource until the owner
+// explicitly opens sales.
+function paymentsAreEnabled(env) {
+  return String(env?.PAYMENTS_ENABLED || '').trim().toLowerCase() === 'true';
+}
+
 function hasSecureDownloadConfiguration(env) {
   return hasConfiguredSecret(env?.DOWNLOAD_TOKEN_SECRET, 32);
 }
 
-// Never open a payment window unless every part of paid delivery is ready.
-// In particular, the webhook is required for recovery when a buyer closes
-// the checkout window before the browser callback completes.
+// This covers the secure delivery machinery itself. Keep it independent from
+// the public sales switch so a sale already in progress can still be verified,
+// recovered, and fulfilled if the owner pauses new purchases.
 function hasPaymentDeliveryConfiguration(env) {
   return hasPaperStorage(env)
     && hasSecureDownloadConfiguration(env)
@@ -156,8 +164,20 @@ function hasPaymentDeliveryConfiguration(env) {
     && hasConfiguredSecret(env?.RAZORPAY_WEBHOOK_SECRET);
 }
 
+// New sales require both a complete payment-delivery configuration and an
+// explicit owner decision to open checkout to the public.
+function canAcceptNewPayments(env) {
+  return paymentsAreEnabled(env) && hasPaymentDeliveryConfiguration(env);
+}
+
 function paymentDeliveryUnavailableResponse(env) {
   if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
+  if (!paymentsAreEnabled(env)) {
+    return json({
+      error: 'Secure purchases are not open yet. The administrator must enable sales after completing the final payment checks.',
+      code: 'PAYMENTS_DISABLED'
+    }, 503);
+  }
   return json({
     error: 'Secure purchases are not configured yet. The administrator must complete protected downloads and payment-webhook setup before accepting payments.',
     code: 'PAYMENT_DELIVERY_UNAVAILABLE'
@@ -563,9 +583,9 @@ function rowToCard(row) {
   };
 }
 
-function publicCard(card, storageReady = true) {
+function publicCard(card, paymentDeliveryReady = false) {
   const { fileKey, ...safe } = card;
-  return { ...safe, available: Boolean(fileKey) && storageReady && cardIsPubliclyVisible(card) };
+  return { ...safe, available: Boolean(fileKey) && paymentDeliveryReady && cardIsPubliclyVisible(card) };
 }
 
 async function readCards(env) {
@@ -1082,8 +1102,8 @@ function seedPapers() {
 }
 
 async function allPapers(env) {
-  const storageReady = hasPaperStorage(env);
-  const cards = (await readPublicCards(env)).map((card) => publicCard(card, storageReady));
+  const paymentDeliveryReady = canAcceptNewPayments(env);
+  const cards = (await readPublicCards(env)).map((card) => publicCard(card, paymentDeliveryReady));
   const cardSlugs = new Set(cards.map((card) => card.slug));
   return [...cards, ...seedPapers().filter((paper) => !cardSlugs.has(paper.slug))];
 }
@@ -1165,8 +1185,8 @@ async function filterPapers(env, searchParams) {
   }
   const statement = env.DB.prepare(cardSelectSql(clauses.join(' AND '), 'c.sort_order ASC, c.updated_at DESC', '100'));
   const boundStatement = bindings.length ? statement.bind(...bindings) : statement;
-  const storageReady = hasPaperStorage(env);
-  const custom = ((await boundStatement.all()).results || []).map(rowToCard).map((card) => publicCard(card, storageReady));
+  const paymentDeliveryReady = canAcceptNewPayments(env);
+  const custom = ((await boundStatement.all()).results || []).map(rowToCard).map((card) => publicCard(card, paymentDeliveryReady));
   const customSlugs = new Set(custom.map((paper) => paper.slug));
   const filters = { query, className, subject, type, tag };
   const seeds = seedPapers().filter((paper) => !customSlugs.has(paper.slug) && matchesPaper(paper, filters));
@@ -1175,7 +1195,7 @@ async function filterPapers(env, searchParams) {
 
 async function findPaperBySlug(env, slug) {
   const card = await getPublicCardBySlug(env, slug);
-  if (card) return publicCard(card, hasPaperStorage(env));
+  if (card) return publicCard(card, canAcceptNewPayments(env));
   return seedPapers().find((paper) => paper.slug === slug) || null;
 }
 
@@ -1201,7 +1221,7 @@ function publicSection(section) {
 }
 
 async function publicCatalog(env) {
-  const storageReady = hasPaperStorage(env);
+  const paymentDeliveryReady = canAcceptNewPayments(env);
   const allSections = await readSections(env);
   const sectionsById = new Map(allSections.map((section) => [section.id, section]));
   const visibleSections = allSections.filter((section) => section.isPublished
@@ -1220,8 +1240,8 @@ async function publicCatalog(env) {
   const unsectionedCards = [];
   for (const card of await readPublicCards(env)) {
     const target = card.sectionId ? nodes.get(card.sectionId) : null;
-    if (target) target.cards.push(publicCard(card, storageReady));
-    else if (!card.sectionId) unsectionedCards.push(publicCard(card, storageReady));
+    if (target) target.cards.push(publicCard(card, paymentDeliveryReady));
+    else if (!card.sectionId) unsectionedCards.push(publicCard(card, paymentDeliveryReady));
   }
   return { sections: roots, cards: unsectionedCards };
 }
@@ -1251,11 +1271,11 @@ async function publicCollection(env, slug) {
     env.DB.prepare(cardSelectSql(`c.section_id = ? AND ${publicCardVisibilityClause()}`, 'c.sort_order ASC, c.updated_at DESC', '1000'))
       .bind(section.id).all()
   ]);
-  const storageReady = hasPaperStorage(env);
+  const paymentDeliveryReady = canAcceptNewPayments(env);
   return {
     section,
     children: (childrenResult.results || []).map(rowToSection).map(publicSection),
-    cards: (cardsResult.results || []).map(rowToCard).map((card) => publicCard(card, storageReady))
+    cards: (cardsResult.results || []).map(rowToCard).map((card) => publicCard(card, paymentDeliveryReady))
   };
 }
 
@@ -1791,6 +1811,7 @@ async function cleanupExpiredRecords(env, now = new Date()) {
   const dailyCutoff = istDayKeyDaysAgo(ANALYTICS_DAILY_RETENTION_DAYS, now);
   const nowIso = now.toISOString();
   await env.DB.batch([
+    env.DB.prepare('DELETE FROM admin_sessions WHERE expires_at < ?').bind(now.getTime()),
     env.DB.prepare('DELETE FROM login_attempts WHERE window_started_at < ?').bind(rateLimitCutoff),
     env.DB.prepare('DELETE FROM checkout_attempts WHERE window_started_at < ?').bind(rateLimitCutoff),
     env.DB.prepare('DELETE FROM analytics_attempts WHERE window_started_at < ?').bind(rateLimitCutoff),
@@ -1894,12 +1915,21 @@ async function razorpayFetch(url, init) {
   }
 }
 
+function paymentMatchesOrder(payment, order) {
+  return typeof payment?.id === 'string'
+    && /^[A-Za-z0-9_]{6,120}$/.test(payment.id)
+    && payment.order_id === order?.razorpay_order_id
+    && Number.isSafeInteger(Number(payment.amount))
+    && Number(payment.amount) === Number(order?.amount)
+    && String(payment.currency || '').toUpperCase() === String(order?.currency || '').toUpperCase();
+}
+
 async function razorpayPayment(env, order, paymentId) {
   const upstream = await razorpayFetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(paymentId)}`, {
     headers: { Authorization: razorpayAuthorization(env) }
   });
   const payment = await upstream.json().catch(() => ({}));
-  if (!upstream.ok || payment.order_id !== order.razorpay_order_id || Number(payment.amount) !== Number(order.amount) || payment.currency !== order.currency) {
+  if (!upstream.ok || !paymentMatchesOrder(payment, order)) {
     throw new Error('Payment details could not be confirmed.');
   }
   if (payment.status !== 'captured') throw new Error('Payment is still being processed. Please wait a moment and try again.');
@@ -1919,7 +1949,7 @@ async function paymentWebhook(request, env) {
     if (!payment?.order_id) return json({ ok: true });
     const order = await getOrder(env, payment.order_id);
     if (!order) return json({ ok: true });
-    if (event.event === 'payment.captured' && payment.status === 'captured') {
+    if (event.event === 'payment.captured' && payment.status === 'captured' && paymentMatchesOrder(payment, order)) {
       const recorded = await updateOrderStatus(env, payment.order_id, 'captured', payment.id);
       // Prefer the buyer details the checkout collected, falling back to the
       // provider response for older orders. This preserves a customer name
@@ -1933,7 +1963,7 @@ async function paymentWebhook(request, env) {
         } catch { /* optional profile creation must not reject a valid webhook */ }
       }
     }
-    if (event.event === 'payment.failed') await recordFailedPaymentAttempt(env, payment.order_id);
+    if (event.event === 'payment.failed' && payment.status === 'failed') await recordFailedPaymentAttempt(env, payment.order_id);
     return json({ ok: true });
   } catch (error) {
     if (error instanceof RequestBodyError) return apiErrorResponse(error, 'Invalid webhook payload.');
@@ -2383,9 +2413,9 @@ async function renderSitemap(request, env) {
   const fixed = pages.map((page) => sitemapEntry(origin, page));
   const sections = [...(await readSectionContexts(env)).values()].filter(sectionIsPubliclyVisible);
   const sectionUrls = sections.map((section) => sitemapEntry(origin, collectionUrl(section.slug), section.updatedAt));
-  // Do not publish product URLs to search engines until protected storage is
-  // connected and the PDF could actually be delivered after payment.
-  const cards = hasPaperStorage(env)
+  // Do not publish product URLs to search engines until protected storage,
+  // payment verification, and the explicit sales switch are all ready.
+  const cards = canAcceptNewPayments(env)
     ? (await readPublicCards(env)).filter((card) => card.fileKey)
     : [];
   const cardUrls = cards.map((card) => sitemapEntry(origin, `/paper/${card.slug}`, card.updatedAt));
@@ -2456,7 +2486,7 @@ async function api(request, env, url) {
         env.DB.prepare('SELECT 1 FROM analytics_attempts LIMIT 1').first(),
         env.DB.prepare('SELECT 1 FROM feedback_attempts LIMIT 1').first()
       ]);
-      return json({ ok: true, platform: 'cloudflare', payments: { ready: hasPaymentDeliveryConfiguration(env) } });
+      return json({ ok: true, platform: 'cloudflare', payments: { ready: canAcceptNewPayments(env) } });
     } catch (error) {
       console.error("TK's SOLUTION database health check failed", error);
       return json({ ok: false, error: 'Database migration or connection is unavailable.' }, 503);
@@ -2464,8 +2494,8 @@ async function api(request, env, url) {
   }
   if (request.method === 'GET' && url.pathname === '/api/catalog') return json(await publicCatalog(env));
   if (request.method === 'GET' && url.pathname === '/api/cards') {
-    const storageReady = hasPaperStorage(env);
-    return json({ cards: (await filteredCards(env, url.searchParams)).map((card) => publicCard(card, storageReady)) });
+    const paymentDeliveryReady = canAcceptNewPayments(env);
+    return json({ cards: (await filteredCards(env, url.searchParams)).map((card) => publicCard(card, paymentDeliveryReady)) });
   }
   if (request.method === 'GET' && url.pathname === '/api/papers') return json({ papers: await filterPapers(env, url.searchParams) });
   const slugMatch = url.pathname.match(/^\/api\/papers\/slug\/([a-z0-9-]+)$/i);
@@ -2523,7 +2553,7 @@ async function api(request, env, url) {
     catch (error) { return apiErrorResponse(error, 'Invalid checkout details.'); }
     const card = await getCardBySlug(env, checkoutMatch[1]);
     if (!card?.fileKey || !cardIsPubliclyVisible(card) || !await env.PAPERS.head(card.fileKey)) return json({ error: 'This paper is not ready for secure purchase yet.' }, 404);
-    if (!hasPaymentDeliveryConfiguration(env)) return paymentDeliveryUnavailableResponse(env);
+    if (!canAcceptNewPayments(env)) return paymentDeliveryUnavailableResponse(env);
     if (!await consumeRateLimit(request, env, 'checkout_attempts', CHECKOUT_WINDOW_MS, MAX_CHECKOUT_ATTEMPTS)) return json({ error: 'Too many checkout attempts from this connection. Please wait 10 minutes and try again.' }, 429);
     const receipt = `best_${crypto.randomUUID().replace(/-/g, '').slice(0, 30)}`;
     const amount = fixedCardPrice(card.isBundle) * 100;
@@ -2545,7 +2575,7 @@ async function api(request, env, url) {
     // Keep the buyer details on the pending order, but do not create a student
     // profile until Razorpay has actually confirmed capture.
     await saveOrder(env, { orderId: order.id, cardId: card.id, amount, currency: 'INR', recoveryTokenHash: await sha256Hex(recoveryToken), expiresAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(), recoveryExpiresAt, buyerEmail: buyer.email, buyerName: buyer.name });
-    return json({ key: env.RAZORPAY_KEY_ID, order: { id: order.id, amount, currency: 'INR' }, recovery: { expiresAt: recoveryExpiresAt }, buyer: { email: buyer.email, name: buyer.name }, paper: publicCard(card) }, 200, {
+    return json({ key: env.RAZORPAY_KEY_ID, order: { id: order.id, amount, currency: 'INR' }, recovery: { expiresAt: recoveryExpiresAt }, buyer: { email: buyer.email, name: buyer.name }, paper: publicCard(card, canAcceptNewPayments(env)) }, 200, {
       'Set-Cookie': recoveryCookie(order.id, recoveryToken, Math.ceil(DOWNLOAD_DURATION_MS / 1000), url.protocol === 'https:')
     });
   }
@@ -2767,8 +2797,11 @@ async function api(request, env, url) {
   if (request.method === 'PUT' && url.pathname === '/api/admin/import') {
     try {
       const input = await readJson(request, 2_000_000);
-      const source = Array.isArray(input) ? input : input.cards;
-      const sourceSections = Array.isArray(input) ? undefined : input.sections;
+      if (!input || typeof input !== 'object' || Array.isArray(input) || input.confirmReplace !== true) {
+        throw new Error('Confirm that this backup should replace the full library before importing it.');
+      }
+      const source = input.cards;
+      const sourceSections = input.sections;
       if (!Array.isArray(source) || source.length > 500) throw new Error('Choose a valid backup with no more than 500 cards.');
       if (sourceSections !== undefined && (!Array.isArray(sourceSections) || sourceSections.length > 200)) throw new Error('Choose a valid backup with no more than 200 catalogue sections.');
       if (await hasAnyActivePaidDownloads(env)) throw new Error('Wait until active paid download links expire before importing a full card backup.');

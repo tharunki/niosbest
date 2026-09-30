@@ -1,0 +1,21 @@
+/* Shared keyboard and motion preferences for the public study pages. */
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 3px solid #263eb7;
+  outline-offset: 3px;
+}
+
+.search-box input:focus-visible {
+  outline: 3px solid #263eb7;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

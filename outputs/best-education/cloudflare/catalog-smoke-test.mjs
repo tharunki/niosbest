@@ -190,12 +190,25 @@ response = await call(adminRequest('/api/admin/cards', 'POST', {
 assert.equal(response.status, 201);
 const paidCard = (await response.json()).card;
 
-const incompletePaymentEnv = { ...env, RAZORPAY_KEY_ID: 'rzp_test_checkout', RAZORPAY_KEY_SECRET: 'checkout-secret' };
+const configuredButPausedEnv = { ...env, RAZORPAY_KEY_ID: 'rzp_test_checkout', RAZORPAY_KEY_SECRET: 'checkout-secret', RAZORPAY_WEBHOOK_SECRET: 'checkout-webhook-secret' };
+response = await worker.fetch(new Request(`${origin}/api/papers/slug/${paidCard.slug}`), configuredButPausedEnv);
+assert.equal((await response.json()).paper.available, false, 'a configured-but-paused payment system never advertises a buyable PDF');
+response = await worker.fetch(new Request(`${origin}/paper/${paidCard.slug}`), configuredButPausedEnv);
+assert.match(await response.text(), /noindex,nofollow/, 'a configured-but-paused paid paper is not indexable');
+response = await worker.fetch(new Request(`${origin}/healthz`), configuredButPausedEnv);
+assert.equal((await response.json()).payments.ready, false, 'health keeps sales closed until the explicit payment switch is enabled');
+response = await worker.fetch(jsonRequest(`/api/checkout/${paidCard.slug}`, { buyerEmail: 'student@example.test', buyerName: 'Test Student' }), configuredButPausedEnv);
+assert.equal(response.status, 503, 'checkout stays closed while the owner has not explicitly opened sales');
+assert.equal((await response.json()).code, 'PAYMENTS_DISABLED');
+
+const incompletePaymentEnv = { ...env, PAYMENTS_ENABLED: 'true', RAZORPAY_KEY_ID: 'rzp_test_checkout', RAZORPAY_KEY_SECRET: 'checkout-secret' };
 response = await worker.fetch(jsonRequest(`/api/checkout/${paidCard.slug}`, { buyerEmail: 'student@example.test', buyerName: 'Test Student' }), incompletePaymentEnv);
 assert.equal(response.status, 503, 'checkout stays closed until protected downloads and a webhook are configured');
 assert.equal((await response.json()).code, 'PAYMENT_DELIVERY_UNAVAILABLE');
 
-const checkoutEnv = { ...env, RAZORPAY_KEY_ID: 'rzp_test_checkout', RAZORPAY_KEY_SECRET: 'checkout-secret', RAZORPAY_WEBHOOK_SECRET: 'checkout-webhook-secret' };
+const checkoutEnv = { ...configuredButPausedEnv, PAYMENTS_ENABLED: 'true' };
+response = await worker.fetch(new Request(`${origin}/healthz`), checkoutEnv);
+assert.equal((await response.json()).payments.ready, true, 'health reports when a complete payment setup has explicitly opened sales');
 const originalFetch = globalThis.fetch;
 let fakeOrderNumber = 0;
 let firstCheckout;
@@ -238,9 +251,24 @@ let retryOrderRow = sqlite.prepare('SELECT status,razorpay_payment_id FROM order
 assert.equal(retryOrderRow.status, 'failed', 'a failed payment marks an unfinished order as failed');
 assert.equal(retryOrderRow.razorpay_payment_id, null, 'a failed transaction ID is never stored as the successful payment ID');
 response = await worker.fetch(webhookRequest('payment.captured', {
-  id: 'pay_test_successful_retry', order_id: retryOrder.razorpay_order_id, status: 'captured'
+  id: 'pay_test_wrong_amount', order_id: retryOrder.razorpay_order_id, amount: 3901, currency: 'INR', status: 'captured'
 }, checkoutEnv.RAZORPAY_WEBHOOK_SECRET), checkoutEnv);
-assert.equal(response.status, 200, 'a later captured retry is accepted');
+assert.equal(response.status, 200, 'a signed webhook with the wrong amount is acknowledged but not fulfilled');
+retryOrderRow = sqlite.prepare('SELECT status,razorpay_payment_id FROM orders WHERE razorpay_order_id = ?').get(retryOrder.razorpay_order_id);
+assert.equal(retryOrderRow.status, 'failed', 'a captured webhook with the wrong amount cannot mark an order paid');
+assert.equal(retryOrderRow.razorpay_payment_id, null, 'a captured webhook with the wrong amount cannot store a payment ID');
+response = await worker.fetch(webhookRequest('payment.captured', {
+  id: 'pay_test_wrong_currency', order_id: retryOrder.razorpay_order_id, amount: 3900, currency: 'USD', status: 'captured'
+}, checkoutEnv.RAZORPAY_WEBHOOK_SECRET), checkoutEnv);
+assert.equal(response.status, 200, 'a signed webhook with the wrong currency is acknowledged but not fulfilled');
+retryOrderRow = sqlite.prepare('SELECT status,razorpay_payment_id FROM orders WHERE razorpay_order_id = ?').get(retryOrder.razorpay_order_id);
+assert.equal(retryOrderRow.status, 'failed', 'a captured webhook with the wrong currency cannot mark an order paid');
+assert.equal(retryOrderRow.razorpay_payment_id, null, 'a captured webhook with the wrong currency cannot store a payment ID');
+const pausedSettlementEnv = { ...checkoutEnv, PAYMENTS_ENABLED: 'false' };
+response = await worker.fetch(webhookRequest('payment.captured', {
+  id: 'pay_test_successful_retry', order_id: retryOrder.razorpay_order_id, amount: 3900, currency: 'INR', status: 'captured'
+}, checkoutEnv.RAZORPAY_WEBHOOK_SECRET), pausedSettlementEnv);
+assert.equal(response.status, 200, 'an in-flight captured payment is settled even after new sales are paused');
 retryOrderRow = sqlite.prepare('SELECT status,razorpay_payment_id FROM orders WHERE razorpay_order_id = ?').get(retryOrder.razorpay_order_id);
 assert.equal(retryOrderRow.status, 'captured', 'a captured retry restores the paid order state');
 assert.equal(retryOrderRow.razorpay_payment_id, 'pay_test_successful_retry', 'the successful transaction ID is retained for recovery');
@@ -296,6 +324,8 @@ const failedOrder = sqlite.prepare("SELECT razorpay_order_id FROM orders WHERE s
 assert.ok(failedOrder, 'parallel checkout test provides a failed order for privacy retention coverage');
 sqlite.prepare("UPDATE orders SET status=?, buyer_email=?, buyer_name=?, recovery_token_hash=?, recovery_expires_at=? WHERE razorpay_order_id=?")
   .run('failed', 'failed@example.test', 'Failed Buyer', 'failed-recovery-token-hash', '2000-01-01T00:00:00.000Z', failedOrder.razorpay_order_id);
+sqlite.prepare('INSERT INTO admin_sessions (token_hash,expires_at,created_at) VALUES (?,?,?)')
+  .run('expired-session-hash', Date.now() - 1, '2000-01-01T00:00:00.000Z');
 const scheduledTasks = [];
 await worker.scheduled({}, env, { waitUntil(task) { scheduledTasks.push(task); } });
 await Promise.all(scheduledTasks);
@@ -303,6 +333,7 @@ assert.equal(sqlite.prepare("SELECT 1 FROM analytics_attempts WHERE client_hash 
 assert.equal(sqlite.prepare("SELECT 1 FROM feedback_attempts WHERE client_hash = 'old-feedback-attempt'").get(), undefined, 'scheduled cleanup removes expired feedback rate-limit rows');
 assert.equal(sqlite.prepare("SELECT 1 FROM login_attempts WHERE client_hash = 'old-login-attempt'").get(), undefined, 'scheduled cleanup removes expired login rate-limit rows');
 assert.equal(sqlite.prepare("SELECT 1 FROM checkout_attempts WHERE client_hash = 'old-checkout-attempt'").get(), undefined, 'scheduled cleanup removes expired checkout rate-limit rows');
+assert.equal(sqlite.prepare("SELECT 1 FROM admin_sessions WHERE token_hash = 'expired-session-hash'").get(), undefined, 'scheduled cleanup removes expired admin sessions');
 assert.equal(sqlite.prepare("SELECT 1 FROM analytics_visitors WHERE visitor_hash = 'old-visitor'").get(), undefined, 'scheduled cleanup removes expired anonymous visitor hashes');
 assert.equal(sqlite.prepare("SELECT 1 FROM analytics_daily WHERE day = '2000-01-01'").get(), undefined, 'scheduled cleanup retains only the configured analytics history');
 const redactedOrder = sqlite.prepare('SELECT status,buyer_email,buyer_name,recovery_token_hash FROM orders WHERE razorpay_order_id = ?').get(abandonedOrder.razorpay_order_id);
@@ -453,19 +484,27 @@ assert.equal(backup.version, 5);
 assert.ok(backup.sections.some((section) => section.id === formulaSection.id));
 assert.ok(backup.cards.some((card) => card.id === genericCard.id));
 
+const libraryCountBeforeRejectedImport = sqlite.prepare('SELECT COUNT(*) AS count FROM cards').get().count;
 response = await call(adminRequest('/api/admin/import', 'PUT', backup, cookie));
+assert.equal(response.status, 400, 'a full-library import requires explicit replacement confirmation');
+assert.equal(sqlite.prepare('SELECT COUNT(*) AS count FROM cards').get().count, libraryCountBeforeRejectedImport, 'an unconfirmed import cannot replace cards');
+assert.ok(sqlite.prepare('SELECT 1 FROM catalog_sections WHERE id = ?').get(formulaSection.id), 'an unconfirmed import cannot replace sections');
+response = await call(adminRequest('/api/admin/import', 'PUT', { ...backup, confirmReplace: true }, cookie));
 const importResult = await response.json();
 assert.equal(response.status, 200, `v5 graph backup restores atomically: ${JSON.stringify(importResult)}`);
 
 response = await call(new Request(`${origin}/sitemap.xml`));
 let sitemap = await response.text();
+assert.doesNotMatch(sitemap, new RegExp(`/paper/${paidCard.slug}`), 'a paused payment system excludes paid papers from the sitemap');
+response = await worker.fetch(new Request(`${origin}/sitemap.xml`), checkoutEnv);
+sitemap = await response.text();
 assert.match(sitemap, new RegExp(`/paper/${paidCard.slug}`), 'published secure card is indexed');
 assert.match(sitemap, new RegExp(`/collection/${formulaSection.slug}`), 'published collection pages are indexed');
 assert.match(sitemap, /\/privacy\.html/, 'the privacy notice is indexed');
 assert.match(sitemap, /\/terms\.html/, 'the terms page is indexed');
 response = await call(adminRequest(`/api/admin/cards/${paidCard.id}`, 'PUT', { isPublished: false }, cookie));
 assert.equal(response.status, 200);
-response = await call(new Request(`${origin}/sitemap.xml`));
+response = await worker.fetch(new Request(`${origin}/sitemap.xml`), checkoutEnv);
 sitemap = await response.text();
 assert.doesNotMatch(sitemap, new RegExp(`/paper/${paidCard.slug}`), 'draft card is excluded from sitemap');
 response = await call(jsonRequest(`/api/checkout/${paidCard.slug}`, { buyerEmail: 'student@example.test' }));
