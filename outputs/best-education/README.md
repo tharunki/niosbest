@@ -1,6 +1,6 @@
-# Best Education
+# TK's SOLUTION
 
-Best Education sells protected study PDFs for Class 10–12, JEE, NEET and future learning collections. It includes a secure admin area, a shared catalogue, Razorpay checkout, private time-limited downloads, and an automatically generated sitemap.
+TK's SOLUTION sells protected study PDFs for Class 10–12, JEE, NEET and future learning collections. It includes a secure admin area, a shared catalogue, Razorpay checkout, private time-limited downloads, and an automatically generated sitemap.
 
 The recommended live deployment is the **Cloudflare free tier**: static pages are served from Cloudflare's edge, the shared catalogue and orders live in D1, and PDFs are stored in a private R2 bucket. The legacy Node/Render server is retained only for local development and is **not approved for live paid sales**.
 

@@ -60,9 +60,9 @@ function setMeta(attribute, name, content) {
 
 function updateDocumentMetadata(paper) {
   const fallbackTitle = compactText(paper.title, 100) || 'Study material';
-  const title = compactText(paper.metaTitle || paper.seoTitle, 100) || `${fallbackTitle} | Best Education`;
+  const title = compactText(paper.metaTitle || paper.seoTitle, 100) || `${fallbackTitle} | TK's SOLUTION`;
   const description = compactText(paper.metaDescription || paper.seoDescription || paper.description, 180)
-    || 'Chapter-wise study material from Best Education.';
+    || "Chapter-wise study material from TK's SOLUTION.";
   const keywords = normaliseTags(paper.seoKeywords || paper.keywords || paper.tags).join(', ');
 
   document.title = title;
@@ -135,7 +135,7 @@ function showError(message) {
   detail.innerHTML = `<h1>Paper unavailable</h1><p class="error">${escapeHTML(message)}</p><p><a href="/library.html">Return to the library</a></p>`;
 }
 
-const recoveryKey = `best-education-purchase-${slug}`;
+const recoveryKey = `tks-solution-purchase-${slug}`;
 
 function readRecovery() {
   try {
@@ -238,7 +238,7 @@ async function buy(paper, form) {
       key: checkout.key,
       amount: checkout.order.amount,
       currency: checkout.order.currency,
-      name: 'Best Education',
+      name: "TK's SOLUTION",
       description: paper.title,
       order_id: checkout.order.id,
       theme: { color: '#263eb7' },
@@ -282,7 +282,7 @@ function tagChips(paper) {
 }
 
 function feedbackMarkup() {
-  return `<details class="feedback"><summary>Report a content issue</summary><p>If you spot an incorrect answer, typo or broken link, send a short report to Best Education. Do not include personal details.</p><form id="feedback-form"><label for="feedback-category">Issue type</label><select id="feedback-category" name="category" required><option value="incorrect-answer">Incorrect answer or solution</option><option value="typo">Typo or formatting issue</option><option value="broken-link">Broken link or file issue</option><option value="other">Other content issue</option></select><label for="feedback-message">What needs correcting?</label><textarea id="feedback-message" name="message" maxlength="1200" minlength="5" required placeholder="Describe the page, question or correction."></textarea><div class="feedback-actions"><button class="secondary" type="submit">Send report</button><p id="feedback-status" class="notice" role="status" aria-live="polite"></p></div></form></details>`;
+  return `<details class="feedback"><summary>Report a content issue</summary><p>If you spot an incorrect answer, typo or broken link, send a short report to TK's SOLUTION. Do not include personal details.</p><form id="feedback-form"><label for="feedback-category">Issue type</label><select id="feedback-category" name="category" required><option value="incorrect-answer">Incorrect answer or solution</option><option value="typo">Typo or formatting issue</option><option value="broken-link">Broken link or file issue</option><option value="other">Other content issue</option></select><label for="feedback-message">What needs correcting?</label><textarea id="feedback-message" name="message" maxlength="1200" minlength="5" required placeholder="Describe the page, question or correction."></textarea><div class="feedback-actions"><button class="secondary" type="submit">Send report</button><p id="feedback-status" class="notice" role="status" aria-live="polite"></p></div></form></details>`;
 }
 
 function purchaseMarkup() {
@@ -313,7 +313,7 @@ async function submitFeedback(event, paper) {
       })
     });
     form.reset();
-    status.textContent = 'Thank you. Your report has been sent to Best Education.';
+    status.textContent = "Thank you. Your report has been sent to TK's SOLUTION.";
   } catch (error) {
     status.textContent = error.message || 'Your report could not be sent. Please try again.';
   } finally {

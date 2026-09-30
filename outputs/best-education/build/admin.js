@@ -1292,7 +1292,7 @@ function downloadBulkTemplate() {
   const blob = new Blob([`${rows.join('\n')}\n`], { type: 'text/csv;charset=utf-8' });
   const link = document.createElement('a');
   link.href = URL.createObjectURL(blob);
-  link.download = 'best-education-bulk-upload-template.csv';
+  link.download = 'tks-solution-bulk-upload-template.csv';
   document.body.append(link);
   link.click();
   link.remove();
@@ -1583,7 +1583,7 @@ $('#export-data').addEventListener('click', async () => {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    link.download = 'best-education-content-backup.json';
+    link.download = 'tks-solution-content-backup.json';
     document.body.append(link);
     link.click();
     link.remove();
@@ -1676,5 +1676,5 @@ request('/api/admin/session').then(async data => {
   else showLogin();
 }).catch(() => {
   showLogin();
-  loginStatus.textContent = 'Start the Best Education server to use the admin dashboard.';
+  loginStatus.textContent = "Start the TK's SOLUTION server to use the admin dashboard.";
 });

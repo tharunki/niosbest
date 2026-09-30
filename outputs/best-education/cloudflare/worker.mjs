@@ -2297,7 +2297,7 @@ function collectionResourceMarkup(card) {
   return `<article class="collection-resource">
     <p class="collection-resource-label">${escapeHtml(label)}</p>
     <h3>${escapeHtml(card.title)}</h3>
-    <p>${escapeHtml(card.description || 'Focused study material from Best Education.')}</p>
+    <p>${escapeHtml(card.description || "Focused study material from TK's SOLUTION.")}</p>
     ${collectionTagMarkup(card.tags)}
     <footer>${price}${action}</footer>
   </article>`;
@@ -2307,8 +2307,8 @@ function collectionPageHtml(request, collection) {
   const origin = new URL(request.url).origin;
   const { section, children, cards } = collection;
   const canonical = `${origin}${collectionUrl(section.slug)}`;
-  const title = section.metaTitle || `${section.title} Study Resources | Best Education`;
-  const description = section.metaDescription || section.description || `Browse ${section.title} study resources from Best Education.`;
+  const title = section.metaTitle || `${section.title} Study Resources | TK's SOLUTION`;
+  const description = section.metaDescription || section.description || `Browse ${section.title} study resources from TK's SOLUTION.`;
   const keywords = section.seoKeywords || (Array.isArray(section.tags) ? section.tags.join(', ') : '');
   const indexable = !isWorkersDev(request.url);
   const breadcrumbItems = [
@@ -2322,7 +2322,7 @@ function collectionPageHtml(request, collection) {
     ...cards.map((card) => ({
       '@type': 'LearningResource',
       name: card.title,
-      description: card.description || 'Study material from Best Education.',
+      description: card.description || "Study material from TK's SOLUTION.",
       url: `${origin}/paper/${card.slug}`,
       offers: { '@type': 'Offer', price: card.price, priceCurrency: 'INR', availability: card.available ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder' }
     }))
@@ -2336,7 +2336,7 @@ function collectionPageHtml(request, collection) {
         name: section.title,
         description,
         url: canonical,
-        isPartOf: { '@type': 'WebSite', name: 'Best Education', url: `${origin}/` },
+        isPartOf: { '@type': 'WebSite', name: "TK's SOLUTION", url: `${origin}/` },
         ...(itemList.length ? { mainEntity: { '@type': 'ItemList', itemListElement: itemList.map((item, index) => ({ '@type': 'ListItem', position: index + 1, item })) } } : {})
       },
       {
@@ -2359,9 +2359,9 @@ function collectionPageHtml(request, collection) {
     <div class="collection-section-heading"><div><p class="eyebrow">Available to explore</p><h2 id="collection-resources-heading">${escapeHtml(section.title)} resources</h2></div><p>Each published item has its own detail page and secure purchase flow when its PDF is ready.</p></div>
     <div class="collection-grid collection-resource-grid">${cards.map(collectionResourceMarkup).join('')}</div>
   </section>` : '';
-  const emptyState = !children.length && !cards.length ? `<section class="collection-empty"><strong>This collection is being prepared.</strong><p>Best Education will add verified study materials here as they are published.</p><a href="/library.html">Browse every collection</a></section>` : '';
-  const parentLabel = section.parentId ? escapeHtml(section.parentTitle) : 'Best Education study library';
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}">${keywords ? `<meta name="keywords" content="${escapeHtml(keywords)}">` : ''}<link rel="canonical" href="${escapeHtml(canonical)}"><meta property="og:type" content="website"><meta property="og:site_name" content="Best Education"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonical)}"><meta property="og:image" content="${escapeHtml(`${origin}/social-card.png`)}"><meta property="og:image:alt" content="Best Education study materials"><meta property="og:image:width" content="1664"><meta property="og:image:height" content="936"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/social-card.png`)}"><meta name="twitter:image:alt" content="Best Education study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/collection.css"><script type="application/ld+json">${collectionSchema}</script></head><body><header class="collection-header"><div><a class="collection-brand" href="/index.html"><img src="/logo.png" alt="Best Education logo" width="46" height="46">Best <strong>Education</strong></a><a class="collection-library-link" href="/library.html">Study library</a></div></header><main class="collection-page"><nav class="collection-breadcrumb" aria-label="Breadcrumb">${breadcrumbMarkup}</nav><section class="collection-hero"><span class="collection-hero-icon" aria-hidden="true">${escapeHtml(section.icon || '📚')}</span><p class="eyebrow">${parentLabel}</p><h1>${escapeHtml(section.title)}</h1><p>${escapeHtml(description)}</p>${collectionTagMarkup(section.tags)}</section>${childSection}${resourceSection}${emptyState}</main><footer class="collection-footer"><div><div><span>© 2026 Best Education</span><span>Run by Sumathy Manoharan since 2001</span></div><nav aria-label="Footer"><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms &amp; purchases</a><a href="mailto:sumathynl.maths@gmail.com">Contact</a></nav></div></footer><script src="/analytics.js"></script></body></html>`;
+  const emptyState = !children.length && !cards.length ? `<section class="collection-empty"><strong>This collection is being prepared.</strong><p>TK's SOLUTION will add verified study materials here as they are published.</p><a href="/library.html">Browse every collection</a></section>` : '';
+  const parentLabel = section.parentId ? escapeHtml(section.parentTitle) : "TK's SOLUTION study library";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}">${keywords ? `<meta name="keywords" content="${escapeHtml(keywords)}">` : ''}<link rel="canonical" href="${escapeHtml(canonical)}"><meta property="og:type" content="website"><meta property="og:site_name" content="TK's SOLUTION"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonical)}"><meta property="og:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta property="og:image:alt" content="TK's SOLUTION study materials"><meta property="og:image:width" content="1672"><meta property="og:image:height" content="941"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta name="twitter:image:alt" content="TK's SOLUTION study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/collection.css"><script type="application/ld+json">${collectionSchema}</script></head><body><header class="collection-header"><div><a class="collection-brand" href="/index.html"><img src="/tk-solution-logo.png" alt="TK's SOLUTION logo" width="46" height="46">TK's <strong>SOLUTION</strong></a><a class="collection-library-link" href="/library.html">Study library</a></div></header><main class="collection-page"><nav class="collection-breadcrumb" aria-label="Breadcrumb">${breadcrumbMarkup}</nav><section class="collection-hero"><span class="collection-hero-icon" aria-hidden="true">${escapeHtml(section.icon || '📚')}</span><p class="eyebrow">${parentLabel}</p><h1>${escapeHtml(section.title)}</h1><p>${escapeHtml(description)}</p>${collectionTagMarkup(section.tags)}</section>${childSection}${resourceSection}${emptyState}</main><footer class="collection-footer"><div><div><span>© 2026 TK's SOLUTION</span><span>Run by Sumathy Manoharan since 2001</span></div><nav aria-label="Footer"><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms &amp; purchases</a><a href="mailto:sumathynl.maths@gmail.com">Contact</a></nav></div></footer><script src="/analytics.js"></script></body></html>`;
 }
 
 async function renderCollectionPage(request, env, slug) {
@@ -2400,7 +2400,7 @@ function renderRobots(request) {
 
 function paperPageHtml(request, paper) {
   const origin = new URL(request.url).origin;
-  const title = paper.metaTitle || `${paper.title} | Best Education`;
+  const title = paper.metaTitle || `${paper.title} | TK's SOLUTION`;
   const description = paper.metaDescription || paper.description || 'Chapter-wise study material for focused revision.';
   const keywords = paper.seoKeywords || (Array.isArray(paper.tags) ? paper.tags.join(', ') : '');
   const indexable = paper.available && !isWorkersDev(request.url);
@@ -2414,10 +2414,10 @@ function paperPageHtml(request, paper) {
     description,
     educationalLevel,
     learningResourceType,
-    provider: { '@type': 'EducationalOrganization', name: 'Best Education' },
+    provider: { '@type': 'EducationalOrganization', name: "TK's SOLUTION" },
     offers: { '@type': 'Offer', price: paper.price, priceCurrency: 'INR', availability: paper.available ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder', url: `${origin}/paper/${paper.slug}` }
   }).replace(/</g, '\\u003c');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}">${keywords ? `<meta name="keywords" content="${escapeHtml(keywords)}">` : ''}<link rel="canonical" href="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:type" content="product"><meta property="og:site_name" content="Best Education"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:image" content="${escapeHtml(`${origin}/social-card.png`)}"><meta property="og:image:alt" content="Best Education study materials"><meta property="og:image:width" content="1664"><meta property="og:image:height" content="936"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/social-card.png`)}"><meta name="twitter:image:alt" content="Best Education study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"><script type="application/ld+json">${productSchema}</script></head><body><header><a class="brand" href="/index.html"><img src="/logo.png" alt="Best Education logo" width="46" height="46">Best <strong>Education</strong></a><a href="/index.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script><script src="/analytics.js"></script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}">${keywords ? `<meta name="keywords" content="${escapeHtml(keywords)}">` : ''}<link rel="canonical" href="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:type" content="product"><meta property="og:site_name" content="TK's SOLUTION"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta property="og:image:alt" content="TK's SOLUTION study materials"><meta property="og:image:width" content="1672"><meta property="og:image:height" content="941"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta name="twitter:image:alt" content="TK's SOLUTION study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"><script type="application/ld+json">${productSchema}</script></head><body><header><a class="brand" href="/index.html"><img src="/tk-solution-logo.png" alt="TK's SOLUTION logo" width="46" height="46">TK's <strong>SOLUTION</strong></a><a href="/index.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script><script src="/analytics.js"></script></body></html>`;
 }
 
 async function renderPaperPage(request, env, slug) {
@@ -2456,7 +2456,7 @@ async function api(request, env, url) {
       ]);
       return json({ ok: true, platform: 'cloudflare', payments: { ready: hasPaymentDeliveryConfiguration(env) } });
     } catch (error) {
-      console.error('Best Education database health check failed', error);
+      console.error("TK's SOLUTION database health check failed", error);
       return json({ ok: false, error: 'Database migration or connection is unavailable.' }, 503);
     }
   }
@@ -2576,7 +2576,7 @@ async function api(request, env, url) {
       const recoveryToken = cookieName ? String(parseCookies(request)[cookieName] || '') : '';
       if (!cookieName || !/^[A-Za-z0-9_-]{43}$/.test(recoveryToken)) throw new Error('This purchase recovery request is invalid.');
       const order = await env.DB.prepare('SELECT * FROM orders WHERE razorpay_order_id = ? AND recovery_token_hash = ?').bind(orderId, await sha256Hex(recoveryToken)).first();
-      if (!order || new Date(order.recovery_expires_at).getTime() < Date.now()) throw new Error('This purchase recovery link has expired. Please contact Best Education with your payment details.');
+      if (!order || new Date(order.recovery_expires_at).getTime() < Date.now()) throw new Error("This purchase recovery link has expired. Please contact TK's SOLUTION with your payment details.");
       if (order.status === 'failed') throw new Error('This payment was not completed.');
       if (isTrue(order.access_revoked) || order.status === 'refunded') throw new Error('Access to this purchase has been revoked.');
       if (!order.razorpay_payment_id) return json({ pending: true, message: 'Payment confirmation is still arriving. Please check again in a minute.' }, 202);
@@ -2822,13 +2822,13 @@ export default {
       if (staticPagePaths.has(url.pathname)) return await renderStaticPage(request, env);
       return cacheStaticAsset(await env.ASSETS.fetch(request), request);
     } catch (error) {
-      console.error('Best Education Worker error', error);
+      console.error("TK's SOLUTION Worker error", error);
       return json({ error: 'The service could not complete that request. Please try again.' }, 500);
     }
   },
   async scheduled(_controller, env, ctx) {
     const cleanup = cleanupExpiredRecords(env).catch((error) => {
-      console.error('Best Education retention cleanup failed', error);
+      console.error("TK's SOLUTION retention cleanup failed", error);
     });
     if (ctx && typeof ctx.waitUntil === 'function') {
       ctx.waitUntil(cleanup);

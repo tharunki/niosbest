@@ -31,14 +31,14 @@
   function reportVisit() {
     if (shouldSkip()) return;
     const day = dayInIndia();
-    const key = `best-education-visit-${day}`;
+    const key = `tks-solution-visit-${day}`;
     try {
       if (sessionStorage.getItem(key) || localStorage.getItem(key)) return;
       sessionStorage.setItem(key, '1');
       localStorage.setItem(key, '1');
     } catch {
-      if (window.__bestEducationVisitReported) return;
-      window.__bestEducationVisitReported = true;
+      if (window.__tksSolutionVisitReported) return;
+      window.__tksSolutionVisitReported = true;
     }
 
     void fetch(endpoint, {

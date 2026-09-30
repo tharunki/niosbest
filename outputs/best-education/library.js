@@ -11,7 +11,7 @@ const catalog = {
 const type = document.body.dataset.type;
 const labels = { sample: 'Sample Paper', pyq: 'Previous Year Questions', mcq: 'MCQ Practice Set', important: 'Important Questions' };
 const slugs = { sample: 'sample-papers.html', pyq: 'pyqs.html', mcq: 'mcqs.html', important: 'important-questions.html' };
-const seoTitle = `${labels[type]} for Classes 10, 11 & 12 | Best Education`;
+const seoTitle = `${labels[type]} for Classes 10, 11 & 12 | TK's SOLUTION`;
 const seoDescription = `Buy chapter-wise ${labels[type].toLowerCase()} PDFs for Classes 10, 11 and 12. Lesson PDFs are ₹39 and complete bundles are ₹399.`;
 document.title = seoTitle;
 
@@ -23,18 +23,18 @@ function setMeta(attribute, name, content) {
 setMeta('name', 'description', seoDescription);
 setMeta('name', 'robots', 'index, follow');
 setMeta('property', 'og:type', 'website');
-setMeta('property', 'og:site_name', 'Best Education');
+setMeta('property', 'og:site_name', "TK's SOLUTION");
 setMeta('property', 'og:title', seoTitle);
 setMeta('property', 'og:description', seoDescription);
 setMeta('property', 'og:url', `https://www.ravitestpapers.in/${slugs[type]}`);
-setMeta('property', 'og:image', 'https://www.ravitestpapers.in/logo.png');
-setMeta('property', 'og:image:alt', 'Best Education logo');
+setMeta('property', 'og:image', 'https://www.ravitestpapers.in/tk-solution-social-card.png');
+setMeta('property', 'og:image:alt', "TK's SOLUTION study materials");
 setMeta('name', 'twitter:card', 'summary_large_image');
-setMeta('name', 'twitter:image', 'https://www.ravitestpapers.in/logo.png');
+setMeta('name', 'twitter:image', 'https://www.ravitestpapers.in/tk-solution-social-card.png');
 setMeta('name', 'twitter:title', seoTitle);
 setMeta('name', 'twitter:description', seoDescription);
 const canonical = document.createElement('link'); canonical.rel = 'canonical'; canonical.href = `https://www.ravitestpapers.in/${slugs[type]}`; document.head.append(canonical);
-document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="logo.png" alt="Best Education logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">Best <b>Education</b>'; });
+document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="tk-solution-logo.png" alt="TK\'s SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">TK\'s <b>SOLUTION</b>'; });
 
 const grid = document.querySelector('#library-grid');
 const courseNote = document.querySelector('#course-note');
@@ -92,7 +92,7 @@ function renderLessons(refresh = true) {
   courseNote.textContent = `Class ${selectedClass} · ${selectedSubject}. Choose a lesson PDF for ₹39, or get the full bundle for ₹399.`;
   const toolbar = `<div class="lesson-toolbar"><span class="chapter">Class ${selectedClass} · ${selectedSubject}</span><button class="back-subjects" type="button">← All subjects</button></div>`;
   if (!lessons.length && !customCards.length) {
-    grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${selectedSubject} lessons will be added next.</strong>Send the subject PDFs or official lesson list and Best Education will add the exact chapter-wise library here.</div>`;
+    grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${selectedSubject} lessons will be added next.</strong>Send the subject PDFs or official lesson list and TK's SOLUTION will add the exact chapter-wise library here.</div>`;
   } else {
     const standardSlugs = new Set();
     const standardCards = lessons.map((lesson, index) => {

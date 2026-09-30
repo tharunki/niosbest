@@ -127,7 +127,7 @@ function renderCollections() {
   catalogNote.textContent = 'Choose a class, exam or learning path.';
   const roots = catalog.sections.filter((section) => !section.parentId);
   if (!roots.length) {
-    catalogGrid.innerHTML = '<div class="catalog-empty"><strong>The library is being prepared.</strong>New class and exam collections will appear here as Best Education publishes them.</div>';
+    catalogGrid.innerHTML = "<div class=\"catalog-empty\"><strong>The library is being prepared.</strong>New class and exam collections will appear here as TK's SOLUTION publishes them.</div>";
     return;
   }
   catalogGrid.innerHTML = roots.map((section) => `<a class="catalog-tile" href="${escapeHTML(sectionHref(section))}"><span class="catalog-tile-icon" aria-hidden="true">${escapeHTML(sectionIcon(section))}</span><h3>${escapeHTML(section.title)}</h3><p>${escapeHTML(section.description || 'Browse the resources in this collection.')}</p><small>Open collection →</small></a>`).join('');
@@ -141,7 +141,7 @@ function renderResources(section) {
   catalogHeading.textContent = section.title;
   catalogNote.textContent = section.description || 'Choose a resource to see its details.';
   if (!allResources.length) {
-    catalogGrid.innerHTML = `<div class="catalog-empty"><strong>${escapeHTML(section.title)} is being prepared.</strong>Best Education will add resources here once they are verified and published.</div>`;
+    catalogGrid.innerHTML = `<div class="catalog-empty"><strong>${escapeHTML(section.title)} is being prepared.</strong>TK's SOLUTION will add resources here once they are verified and published.</div>`;
     return;
   }
   if (!resources.length) {
@@ -149,7 +149,7 @@ function renderResources(section) {
     bindTagFilters(section);
     return;
   }
-  catalogGrid.innerHTML = tagFilterMarkup(filterTags) + resources.map((card) => `<article class="catalog-resource"><span class="chapter">${escapeHTML(card.resourceLabel || card.type || 'Study resource')}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || 'Focused study material from Best Education.')}</p>${tagMarkup(card)}<div class="buy"><span class="price">${card.available ? `₹${escapeHTML(card.price || '39')}<small>${card.isBundle ? 'full bundle' : 'secure PDF'}</small>` : ''}</span>${resourceAction(card)}</div></article>`).join('');
+  catalogGrid.innerHTML = tagFilterMarkup(filterTags) + resources.map((card) => `<article class="catalog-resource"><span class="chapter">${escapeHTML(card.resourceLabel || card.type || 'Study resource')}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || "Focused study material from TK's SOLUTION.")}</p>${tagMarkup(card)}<div class="buy"><span class="price">${card.available ? `₹${escapeHTML(card.price || '39')}<small>${card.isBundle ? 'full bundle' : 'secure PDF'}</small>` : ''}</span>${resourceAction(card)}</div></article>`).join('');
   bindTagFilters(section);
 }
 

@@ -24,7 +24,7 @@ if (!document.querySelector('script[src="analytics.js"]')) {
 
 const labels = { sample: 'Sample Paper', pyq: 'Previous Year Questions', mcq: 'MCQ Practice Set', important: 'Important Questions' };
 const slugs = { sample: 'sample-papers.html', pyq: 'pyqs.html', mcq: 'mcqs.html', important: 'important-questions.html' };
-const seoTitle = `${labels[type]} for Classes 10, 11 & 12 | Best Education`;
+const seoTitle = `${labels[type]} for Classes 10, 11 & 12 | TK's SOLUTION`;
 const seoDescription = `Buy chapter-wise ${labels[type].toLowerCase()} PDFs for Classes 10, 11 and 12. Lesson PDFs are ₹39 and complete bundles are ₹399.`;
 const seoOrigin = location.hostname.endsWith('.workers.dev') ? location.origin : 'https://www.ravitestpapers.in';
 document.title = seoTitle;
@@ -37,24 +37,24 @@ function setMeta(attribute, name, content) {
 setMeta('name', 'description', seoDescription);
 setMeta('name', 'robots', location.hostname.endsWith('.workers.dev') ? 'noindex, nofollow' : 'index, follow');
 setMeta('property', 'og:type', 'website');
-setMeta('property', 'og:site_name', 'Best Education');
+setMeta('property', 'og:site_name', "TK's SOLUTION");
 setMeta('property', 'og:title', seoTitle);
 setMeta('property', 'og:description', seoDescription);
 setMeta('property', 'og:url', `${seoOrigin}/${slugs[type]}`);
-setMeta('property', 'og:image', `${seoOrigin}/social-card.png`);
-setMeta('property', 'og:image:alt', 'Best Education study materials');
-setMeta('property', 'og:image:width', '1664');
-setMeta('property', 'og:image:height', '936');
+setMeta('property', 'og:image', `${seoOrigin}/tk-solution-social-card.png`);
+setMeta('property', 'og:image:alt', "TK's SOLUTION study materials");
+setMeta('property', 'og:image:width', '1672');
+setMeta('property', 'og:image:height', '941');
 setMeta('property', 'og:image:type', 'image/png');
 setMeta('name', 'twitter:card', 'summary_large_image');
-setMeta('name', 'twitter:image', `${seoOrigin}/social-card.png`);
-setMeta('name', 'twitter:image:alt', 'Best Education study materials');
+setMeta('name', 'twitter:image', `${seoOrigin}/tk-solution-social-card.png`);
+setMeta('name', 'twitter:image:alt', "TK's SOLUTION study materials");
 setMeta('name', 'twitter:title', seoTitle);
 setMeta('name', 'twitter:description', seoDescription);
 let canonical = document.head.querySelector('link[rel="canonical"]');
 if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.append(canonical); }
 canonical.href = `${seoOrigin}/${slugs[type]}`;
-document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="logo.png" alt="Best Education logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">Best <b>Education</b>'; });
+document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="tk-solution-logo.png" alt="TK\'s SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">TK\'s <b>SOLUTION</b>'; });
 
 const grid = document.querySelector('#library-grid');
 const courseNote = document.querySelector('#course-note');
@@ -186,7 +186,7 @@ function renderSubjects() {
   const subjects = subjectsForSelectedClass();
   if (!subjects.length) {
     courseNote.textContent = `Class ${selectedClass}: the verified subject catalogue is being prepared.`;
-    grid.innerHTML = `<div class="empty-library"><strong>Class ${escapeHTML(selectedClass)} materials are not published yet.</strong>Best Education will list a subject here after its verified lesson titles and secure PDFs are ready.</div>`;
+    grid.innerHTML = `<div class="empty-library"><strong>Class ${escapeHTML(selectedClass)} materials are not published yet.</strong>TK's SOLUTION will list a subject here after its verified lesson titles and secure PDFs are ready.</div>`;
     bundle.href = '#library-grid';
     bundle.textContent = 'Full bundle coming soon';
     return;
@@ -226,7 +226,7 @@ function renderLessons() {
     : `Class ${selectedClass} · ${selectedSubject}. This catalogue is released only when its secure PDF is ready.`;
   const toolbar = `<div class="lesson-toolbar"><span class="chapter">Class ${escapeHTML(selectedClass)} · ${escapeHTML(selectedSubject)}</span><button class="back-subjects" type="button">← All subjects</button></div>`;
   if (!lessons.length && !allCustomCards.length) {
-    grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${escapeHTML(selectedSubject)} is not published yet.</strong>Best Education will add the exact lesson list and PDFs after they are verified.</div>`;
+    grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${escapeHTML(selectedSubject)} is not published yet.</strong>TK's SOLUTION will add the exact lesson list and PDFs after they are verified.</div>`;
   } else {
     const standardSlugs = new Set();
     const standardCards = lessons.map((lesson, index) => {

@@ -100,7 +100,7 @@ document.querySelector('#filter-cards').addEventListener('input', render);
 document.querySelector('#cancel-edit').addEventListener('click', resetForm);
 document.querySelector('#export-data').addEventListener('click', () => {
   const blob = new Blob([JSON.stringify({ version:3, exportedAt:new Date().toISOString(), cards }, null, 2)], { type:'application/json' });
-  const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'best-education-content-backup.json'; link.click(); URL.revokeObjectURL(link.href); status.textContent = 'Backup exported.'; showToast('Backup exported.');
+  const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'tks-solution-content-backup.json'; link.click(); URL.revokeObjectURL(link.href); status.textContent = 'Backup exported.'; showToast('Backup exported.');
 });
 document.querySelector('#import-data').addEventListener('change', async event => {
   const file = event.target.files[0]; if (!file) return;
@@ -129,4 +129,4 @@ async function removePdf(filename) {
 }
 refreshSubjects();
 syncFixedPrice();
-request('/api/admin/session').then(async data => { if (data.authenticated) { showDashboard(); await Promise.all([loadCards(), loadFiles('')]); } else showLogin(); }).catch(() => { showLogin(); loginStatus.textContent = 'Start the Best Education server to use the admin dashboard.'; });
+request('/api/admin/session').then(async data => { if (data.authenticated) { showDashboard(); await Promise.all([loadCards(), loadFiles('')]); } else showLogin(); }).catch(() => { showLogin(); loginStatus.textContent = "Start the TK's SOLUTION server to use the admin dashboard."; });
