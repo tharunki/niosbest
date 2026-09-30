@@ -82,6 +82,14 @@ async function page(path, cookie = '') {
 try {
   await waitForService();
 
+  // Support clear, shareable public addresses without allowing them to land
+  // on a generic 404 page.
+  for (const [path, target] of [['/courses', '/#courses'], ['/admission-tracker', '/#admission'], ['/refund', '/refund-policy']]) {
+    const response = await fetch(`http://127.0.0.1:${port}${path}`, { redirect: 'manual' });
+    assert.equal(response.status, 302, `${path} should preserve its useful public destination`);
+    assert.equal(response.headers.get('location'), target);
+  }
+
   // Exercise extensionless versions of every private route family. The server
   // must authenticate the resolved .html target, not only the raw request.
   for (const path of ['/active-student-dashboard', '/student-desk', '/student-desk.html', '/student-app', '/student-app.html', '/pending-admission-dashboard', '/batch-hub', '/live-classes', '/homework', '/checkout', '/checkout-v2', '/admission-intake', '/admission-wizard-v2', '/admin-batches', '/admission-admin', '/teacher-portal-v2']) {

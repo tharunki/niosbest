@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { counselorReply } from './counselor.mjs';
 import { captureResourceOrder, resourceStore } from './resource-store.mjs';
+import { inspectResendSenderReadiness, senderDomainForEmail } from './resend-sender-readiness.mjs';
 import { createStateStore, resolveStateStoreConfig } from './state-store.mjs';
 import { readFile, writeFile, mkdir, stat, unlink } from 'node:fs/promises';
 import { createHash, createHmac, randomBytes, randomInt, createCipheriv, createDecipheriv, timingSafeEqual, scryptSync } from 'node:crypto';
@@ -179,12 +180,75 @@ function emailVerificationDeliveryConfig() {
   const from = String(process.env.EMAIL_VERIFICATION_FROM || process.env.ADMISSION_EMAIL_FROM || '').trim();
   return apiKey && from ? { apiKey, from } : null;
 }
+// Production account creation fails closed until a read-only Resend Domains
+// check has confirmed that the exact OTP sender domain is verified. This stops
+// the public interface from promising an email code when a sender is pending,
+// disabled, or unreachable. The opt-in development switch exists solely for
+// isolated local QA against a fake provider; it never weakens production.
+const emailVerificationReadinessRequired = isProduction || process.env.EMAIL_VERIFICATION_REQUIRE_PROVIDER_READINESS === 'true';
+const emailVerificationReadinessCacheMs = (() => {
+  const configured = Number(process.env.EMAIL_VERIFICATION_READINESS_CACHE_MS || 5 * 60_000);
+  return Number.isFinite(configured) ? Math.max(30_000, Math.min(configured, 60 * 60_000)) : 5 * 60_000;
+})();
+const emailVerificationReadiness = {
+  ready: !emailVerificationReadinessRequired,
+  checkedAt: null,
+  expiresAt: 0,
+  code: emailVerificationReadinessRequired ? 'unchecked' : 'not-required'
+};
+let emailVerificationReadinessRequest = null;
+function resendReadinessEndpoint() {
+  // A local fake endpoint is permitted only for controlled non-production QA.
+  // Production always calls the official Resend API over HTTPS.
+  if (isProduction) return 'https://api.resend.com/domains';
+  const override = String(process.env.RESEND_API_BASE_URL || '').trim();
+  if (!override) return 'https://api.resend.com/domains';
+  try {
+    const url = new URL(override);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return 'https://api.resend.com/domains';
+    return new URL('/domains', url).toString();
+  } catch { return 'https://api.resend.com/domains'; }
+}
+function emailVerificationPublicReady() {
+  if (!emailVerificationReadinessRequired) return true;
+  return emailVerificationReadiness.ready && emailVerificationReadiness.expiresAt > Date.now();
+}
+function markEmailVerificationUnavailable(code = 'provider-unavailable') {
+  emailVerificationReadiness.ready = false;
+  emailVerificationReadiness.checkedAt = now();
+  emailVerificationReadiness.expiresAt = Date.now() + emailVerificationReadinessCacheMs;
+  emailVerificationReadiness.code = code;
+}
+async function refreshEmailVerificationReadiness({ force = false } = {}) {
+  if (!emailVerificationReadinessRequired) return { ...emailVerificationReadiness };
+  const timestamp = Date.now();
+  if (!force && emailVerificationReadiness.checkedAt && emailVerificationReadiness.expiresAt > timestamp) return { ...emailVerificationReadiness };
+  if (emailVerificationReadinessRequest) return emailVerificationReadinessRequest;
+  emailVerificationReadinessRequest = (async () => {
+    const config = emailVerificationDeliveryConfig();
+    const result = await inspectResendSenderReadiness({
+      apiKey: config?.apiKey,
+      from: config?.from,
+      endpoint: resendReadinessEndpoint()
+    });
+    emailVerificationReadiness.ready = result.ready === true;
+    emailVerificationReadiness.checkedAt = now();
+    emailVerificationReadiness.expiresAt = Date.now() + emailVerificationReadinessCacheMs;
+    emailVerificationReadiness.code = result.code || (result.ready ? 'verified' : 'provider-unavailable');
+    return { ...emailVerificationReadiness };
+  })().finally(() => { emailVerificationReadinessRequest = null; });
+  return emailVerificationReadinessRequest;
+}
+async function requireEmailVerificationReadiness() {
+  const status = await refreshEmailVerificationReadiness();
+  if (!status.ready) throw Object.assign(new Error('Email verification is temporarily unavailable. Please try again later.'), { status: 503 });
+}
 function publicAvailability() {
   // This deliberately contains operational state rather than configuration
   // values. It lets public pages explain a temporary pause without revealing
   // provider names, endpoint details, or which credentials are absent.
   const secureWritesReady = !isProduction || productionWritesReady;
-  const emailReady = !isProduction || Boolean(emailVerificationDeliveryConfig());
+  const emailReady = emailVerificationPublicReady();
   const paymentProvider = String(process.env.PAYMENT_PROVIDER || 'mock').trim().toLowerCase();
   const paymentReady = !isProduction || (paymentProvider === 'razorpay' && ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'].every(name => String(process.env[name] || '').trim()));
   const applicationMessage = secureWritesReady
@@ -302,6 +366,9 @@ async function deliverPreparedEmailVerification(prepared, source) {
   try {
     return { attempted: true, failed: false, delivery: await sendEmailVerificationCode(prepared.email, prepared.code) };
   } catch (error) {
+    // A sender can be revoked after a successful readiness check. Fail closed
+    // immediately so later visitors are not told that OTP delivery is ready.
+    markEmailVerificationUnavailable('delivery-failed');
     await restoreEmailVerificationAfterDeliveryFailure(prepared, source);
     // Keep provider errors out of public responses. This audit record lets an
     // administrator diagnose the outage without leaking mail-provider detail.
@@ -351,7 +418,7 @@ await updateState(state => {
   }
   if (isProduction && state.users.some(user => ['aarav@example.com', 'admin@niosbest.in', 'teacher@niosbest.in'].includes(String(user.email || '').toLowerCase()))) throw new Error('Production state contains demo accounts. Start with a fresh production state directory or remove the demo accounts before deployment.');
   if (isProduction && !state.users.some(user => user.role === 'admin')) {
-    if (!/^\S+@\S+\.\S+$/.test(bootstrapAdminEmail) || bootstrapAdminPassword.length < 12) throw new Error('Set BOOTSTRAP_ADMIN_EMAIL and a 12+ character BOOTSTRAP_ADMIN_PASSWORD before the first production start.');
+    if (!permanentSuperAdminEmails.has(bootstrapAdminEmail) || bootstrapAdminPassword.length < 12) throw new Error('Set BOOTSTRAP_ADMIN_EMAIL to a protected academy owner address and use a 12+ character BOOTSTRAP_ADMIN_PASSWORD before the first production start.');
     state.users.push({ id: uid('user'), name: 'Academy Administrator', email: bootstrapAdminEmail, passwordHash: hashPassword(bootstrapAdminPassword), role: 'admin', createdAt: now(), bootstrap: true });
   }
   if (demosEnabled) {
@@ -929,10 +996,7 @@ function configuredEnvironmentNames(names) {
   return names.filter(name => !String(process.env[name] || '').trim());
 }
 function configuredEmailDomain(value) {
-  const raw = String(value || '').trim();
-  const address = (raw.match(/<\s*([^<>\s]+@[^<>\s]+)\s*>/) || [])[1] || raw;
-  const match = address.match(/^[^@\s]+@([^@\s]+)$/);
-  return match ? match[1].toLowerCase() : null;
+  return senderDomainForEmail(value);
 }
 function diagnosticFailure(response, fallback = 'provider-unavailable') {
   const status = Number(response?.status);
@@ -1339,6 +1403,15 @@ const mime = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
 async function serveStatic(pathname, response, request) {
   // Never expose backend configuration, state, credentials or QA artifacts.
   if (pathname.includes('\\') || pathname.split('/').some(part => part.startsWith('.')) || pathname.startsWith('/portal-service/')) return send(response, 404, { error: 'Not found' });
+  // A few human-friendly addresses have historically been shared even though
+  // their content lives on the landing page or under a longer policy URL.
+  // Redirect rather than serving a blank or unrelated page so shared links,
+  // bookmarks, and navigation remain useful.
+  const publicRedirects = { '/courses': '/#courses', '/courses.html': '/#courses', '/admission-tracker': '/#admission', '/admission-tracker.html': '/#admission', '/refund': '/refund-policy', '/refund.html': '/refund-policy' };
+  if (publicRedirects[pathname]) {
+    response.writeHead(302, { location: publicRedirects[pathname], 'cache-control': 'no-store' });
+    return response.end();
+  }
   // Do not let the Render service hostname publish a competing sitemap or
   // invite crawlers before the real HTTPS domain is connected and configured.
   if (!searchIndexingAllowed(request) && pathname === '/robots.txt') {
@@ -1467,7 +1540,12 @@ const server = createServer(async (request, response) => {
       availability: publicAvailability(),
       at: now()
     });
-    if (method === 'GET' && path === '/api/public/availability') return send(response, 200, { ...publicAvailability(), at: now() });
+    if (method === 'GET' && path === '/api/public/availability') {
+      // This check only reads Resend domain status; it never sends a message.
+      // Await it here so the public sign-up screen receives a truthful state.
+      await refreshEmailVerificationReadiness();
+      return send(response, 200, { ...publicAvailability(), at: now() });
+    }
     if (method === 'GET' && path === '/api/admission-cycle') { const route = String(url.searchParams.get('route') || 'stream1'); return send(response, 200, admissionCycle(route)); }
     if (method === 'GET' && path === '/api/batches') { const state = await readState(); return send(response, 200, state.batches.filter(batch => { const cycle = batch.board === 'NIOS' ? admissionCycle(batchAdmissionRoute(batch)) : { isOpen: true, route: 'always' }; return batch.published !== false && cycle.isOpen; }).map(batch => { const cycle = batch.board === 'NIOS' ? admissionCycle(batchAdmissionRoute(batch)) : { isOpen: true, route: 'always', lateFee: false }; return { ...batch, admission: cycle, assignedBatchCode: batch.board === 'NIOS' ? assignedBatchCode(batch, cycle) : `BATCH-${batch.id.toUpperCase()}` }; })); }
     if (method === 'POST' && path === '/api/auth/register') {
@@ -1478,7 +1556,7 @@ const server = createServer(async (request, response) => {
       // resend can safely recover it. It never becomes a usable account until
       // its mailbox holder completes verification; production never exposes a
       // code in the response.
-      if (isProduction && !emailVerificationDeliveryConfig()) return send(response, 503, { error: 'Email verification is temporarily unavailable. Please try again later.' });
+      await requireEmailVerificationReadiness();
       enforceAuthThrottle(request, 'email-verification-send-ip', 'all', 12);
       const prepared = await updateState(state => {
         const existing = state.users.find(item => String(item.email || '').toLowerCase() === email);
@@ -1500,6 +1578,7 @@ const server = createServer(async (request, response) => {
         return { shouldDeliver: true, code, email, userId: created.id, previousVerification: null };
       });
       const deliveryResult = await deliverPreparedEmailVerification(prepared, 'registration');
+      if (deliveryResult.failed && emailVerificationReadinessRequired) return send(response, 503, { error: 'Email verification is temporarily unavailable. Please try again later.' });
       // The acknowledgement intentionally has the same shape for an existing
       // address and a newly-created address, preventing account enumeration.
       const acknowledgement = { accepted: true, verificationRequired: true, message: 'If this address can receive verification, a six-digit code has been sent. Enter it to finish creating your account.' };
@@ -1512,7 +1591,7 @@ const server = createServer(async (request, response) => {
     if (method === 'POST' && path === '/api/auth/email-verification/resend') {
       const input = await body(request), email = String(input.email || '').trim().toLowerCase();
       if (!/^\S+@\S+\.\S+$/.test(email)) return send(response, 422, { error: 'Enter a valid email address.' });
-      if (isProduction && !emailVerificationDeliveryConfig()) return send(response, 503, { error: 'Email verification is temporarily unavailable. Please try again later.' });
+      await requireEmailVerificationReadiness();
       enforceAuthThrottle(request, 'email-verification-resend', email, emailVerificationResendRequestLimit);
       enforceAuthThrottle(request, 'email-verification-send-ip', 'all', 12);
       const prepared = await updateState(state => {
@@ -1524,6 +1603,7 @@ const server = createServer(async (request, response) => {
         return { shouldDeliver: true, code, email: user.email, userId: user.id, previousVerification };
       });
       const deliveryResult = await deliverPreparedEmailVerification(prepared, 'resend');
+      if (deliveryResult.failed && emailVerificationReadinessRequired) return send(response, 503, { error: 'Email verification is temporarily unavailable. Please try again later.' });
       const acknowledgement = { accepted: true, verificationRequired: true, message: 'If this address has an unverified account, a fresh six-digit code has been sent.' };
       if (emailVerificationTestMode() && deliveryResult.delivery?.testCode) acknowledgement.testCode = deliveryResult.delivery.testCode;
       return send(response, 202, acknowledgement);

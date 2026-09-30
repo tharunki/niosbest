@@ -64,7 +64,21 @@ try {
   assert.equal(registration.status, 503, 'production registration is blocked without durable state');
   assert.equal(body.code, 'DURABLE_STATE_REQUIRED');
   assert.equal(body.availability.applications.available, false, 'blocked write responses include a safe recovery state for the interface');
-  console.log('production-durable-state-gate.test.mjs: 12 passed');
+
+  const invalidOwnerStateDirectory = await mkdtemp(join(tmpdir(), 'nios-production-owner-gate-'));
+  const invalidOwner = spawn(process.execPath, ['server.mjs'], {
+    cwd: serviceDirectory,
+    env: { ...environment, PORT: String(port + 1), PORTAL_STATE_DIR: invalidOwnerStateDirectory, BOOTSTRAP_ADMIN_EMAIL: 'unapproved-owner@example.test' },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  let invalidOwnerOutput = '';
+  invalidOwner.stdout.on('data', chunk => { invalidOwnerOutput += chunk; });
+  invalidOwner.stderr.on('data', chunk => { invalidOwnerOutput += chunk; });
+  const invalidOwnerExitCode = await new Promise(resolvePromise => invalidOwner.once('exit', resolvePromise));
+  await rm(invalidOwnerStateDirectory, { recursive: true, force: true });
+  assert.notEqual(invalidOwnerExitCode, 0, 'an unapproved bootstrap owner must not start a production service');
+  assert.match(invalidOwnerOutput, /protected academy owner address/i);
+  console.log('production-durable-state-gate.test.mjs: 14 passed');
 } finally {
   child.kill('SIGTERM');
   await new Promise(resolvePromise => child.once('exit', resolvePromise));

@@ -19,7 +19,7 @@ const environment = {
   APP_PUBLIC_URL: 'https://academy.example',
   APP_ENCRYPTION_KEY: 'c'.repeat(64),
   ADMIN_API_TOKEN: 'd'.repeat(40),
-  BOOTSTRAP_ADMIN_EMAIL: 'owner@example.test',
+  BOOTSTRAP_ADMIN_EMAIL: 'niosbest.tvl@gmail.com',
   BOOTSTRAP_ADMIN_PASSWORD: 'a-production-only-test-password',
   ALLOW_DEMO_ACCOUNTS: 'false'
 };

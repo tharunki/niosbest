@@ -6,14 +6,14 @@
   "scripts": {
     "start": "node server.mjs",
     "dev": "node --watch server.mjs",
-    "check": "node --check server.mjs && node --check state-store.mjs",
+    "check": "node --check server.mjs && node --check state-store.mjs && node --check resend-sender-readiness.mjs",
     "test:state": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs",
-    "test:auth": "node qa/email-verification.test.mjs && node qa/email-verification-delivery-failure.test.mjs",
+    "test:auth": "node qa/resend-sender-readiness.test.mjs && node qa/email-verification-readiness-gate.test.mjs && node qa/email-verification.test.mjs && node qa/email-verification-delivery-failure.test.mjs",
     "test:diagnostics": "node qa/integration-diagnostics.test.mjs",
     "test:teacher-materials": "node qa/teacher-material-upload.test.mjs",
     "test:teacher-scheduling": "node qa/teacher-zoom-fallback.test.mjs",
     "test:mira": "node qa/counselor.test.mjs && node qa/mira-client.test.mjs && node --check ../student-assistant.js && node --check ../student-app.js",
-    "test:release": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs && node qa/email-verification.test.mjs && node qa/email-verification-delivery-failure.test.mjs && node qa/admission-documents.test.mjs && node qa/teacher-material-upload.test.mjs && node qa/teacher-zoom-fallback.test.mjs && node qa/release-security.test.mjs && node qa/integration-diagnostics.test.mjs && node qa/canonical-seo-gate.test.mjs && node qa/counselor.test.mjs && node qa/mira-client.test.mjs && node --check ../student-assistant.js && node --check ../student-app.js"
+    "test:release": "node qa/state-store.test.mjs && node qa/production-durable-state-gate.test.mjs && node qa/resend-sender-readiness.test.mjs && node qa/email-verification-readiness-gate.test.mjs && node qa/email-verification.test.mjs && node qa/email-verification-delivery-failure.test.mjs && node qa/admission-documents.test.mjs && node qa/teacher-material-upload.test.mjs && node qa/teacher-zoom-fallback.test.mjs && node qa/release-security.test.mjs && node qa/integration-diagnostics.test.mjs && node qa/canonical-seo-gate.test.mjs && node qa/counselor.test.mjs && node qa/mira-client.test.mjs && node --check ../student-assistant.js && node --check ../student-app.js"
   },
   "engines": {
     "node": ">=20"
