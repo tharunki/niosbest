@@ -289,7 +289,7 @@ function renderLessons() {
   const lessons = catalog[selectedClass]?.[selectedSubject] || [];
   const subjectCards = classCards.filter((card) => card.type === type && card.className === selectedClass && card.subject === selectedSubject);
   const allCustomCards = subjectCards.filter((card) => !card.isBundle);
-  const bundleCard = subjectCards.find((card) => card.isBundle);
+  const bundleCards = subjectCards.filter((card) => card.isBundle);
   const filterTags = availableTags(subjectCards);
   selectedTags = new Set([...selectedTags].filter((tag) => filterTags.some((item) => item.toLocaleLowerCase() === tag)));
   const customCards = allCustomCards.filter(hasSelectedTags);
@@ -298,7 +298,7 @@ function renderLessons() {
     ? `Class ${selectedClass} · ${selectedSubject}. ${listedResources}. ${checkoutStatus(subjectCards)}`
     : `Class ${selectedClass} · ${selectedSubject}. This catalogue is released only when its secure PDF is ready.`;
   const toolbar = `<div class="lesson-toolbar"><span class="chapter">Class ${escapeHTML(selectedClass)} · ${escapeHTML(selectedSubject)}</span><button class="back-subjects" type="button">← All subjects</button></div>`;
-  if (!lessons.length && !allCustomCards.length && !bundleCard) {
+  if (!lessons.length && !allCustomCards.length && !bundleCards.length) {
     grid.innerHTML = `${toolbar}<div class="empty-library"><strong>${escapeHTML(selectedSubject)} is not published yet.</strong>TK's SOLUTION will add the exact lesson list and PDFs after they are verified.</div>`;
   } else {
     const lessonCards = new Set();
@@ -315,20 +315,26 @@ function renderLessons() {
     const addedCards = customCards.filter((card) => !lessonCards.has(card)).map((card) => {
       return `<article class="lesson"><span class="chapter">${escapeHTML(labels[type])} · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || `${labels[type]} practice material`)}</p>${cardTagMarkup(card)}<div class="buy">${purchaseAction(card, '39', 'per PDF')}</div></article>`;
     }).join('');
-    const bundleMatchesTags = bundleCard && hasSelectedTags(bundleCard);
-    const bundleMarkup = bundleMatchesTags
-      ? `<article class="lesson"><span class="chapter">Full course bundle · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(bundleCard.title)}</h3><p>${escapeHTML(bundleCard.description || `${labels[type]} complete course bundle`)}</p>${cardTagMarkup(bundleCard)}<div class="buy">${purchaseAction(bundleCard, '399', 'full course bundle')}</div></article>`
-      : '';
+    const bundleMarkup = bundleCards.filter(hasSelectedTags).map((bundleCard) => {
+      return `<article class="lesson"><span class="chapter">Full course bundle · Class ${escapeHTML(selectedClass)}</span><h3>${escapeHTML(bundleCard.title)}</h3><p>${escapeHTML(bundleCard.description || `${labels[type]} complete course bundle`)}</p>${cardTagMarkup(bundleCard)}<div class="buy">${purchaseAction(bundleCard, '399', 'full course bundle')}</div></article>`;
+    }).join('');
     const resources = standardCards + addedCards + bundleMarkup;
     const noMatches = !resources ? '<div class="empty-library"><strong>No materials match those topic filters.</strong>Clear a filter to see the complete lesson list.</div>' : '';
     grid.innerHTML = toolbar + tagFilterMarkup(filterTags) + resources + noMatches;
   }
   grid.querySelector('.back-subjects')?.addEventListener('click', renderSubjects);
   bindTagFilters();
-  bundle.href = bundleCard ? productLink(bundleCard.slug) : '#library-grid';
-  bundle.textContent = bundleCard
-    ? (bundleCard.available ? `View full bundle · ₹${bundleCard.price || '399'}` : `View full bundle details · ₹${bundleCard.price || '399'}`)
-    : 'Full bundle coming soon';
+  if (bundleCards.length === 1) {
+    const [bundleCard] = bundleCards;
+    bundle.href = productLink(bundleCard.slug);
+    bundle.textContent = bundleCard.available ? `View full bundle · ₹${bundleCard.price || '399'}` : `View full bundle details · ₹${bundleCard.price || '399'}`;
+  } else if (bundleCards.length > 1) {
+    bundle.href = '#library-grid';
+    bundle.textContent = `Choose from ${bundleCards.length} full bundles`;
+  } else {
+    bundle.href = '#library-grid';
+    bundle.textContent = 'Full bundle coming soon';
+  }
 }
 
 classButtons.forEach((button) => button.addEventListener('click', () => {
