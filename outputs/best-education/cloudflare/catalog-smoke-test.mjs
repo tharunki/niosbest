@@ -86,7 +86,7 @@ assert.ok(sqlite.prepare('SELECT expires_at FROM admin_sessions').get().expires_
 
 response = await call(new Request(`${origin}/api/catalog`, { method: 'PATCH' }));
 assert.equal(response.status, 405, 'unsupported API methods must be rejected predictably');
-assert.equal(response.headers.get('allow'), 'GET, POST, PUT, DELETE');
+assert.equal(response.headers.get('allow'), 'GET, HEAD, POST, PUT, DELETE');
 response = await call(new Request(`${origin}/api/payment/webhook`));
 assert.equal(response.status, 405, 'payment webhooks only accept their signed POST requests');
 assert.equal(response.headers.get('allow'), 'POST');
@@ -119,6 +119,8 @@ assert.equal(response.status, 413, 'oversized JSON is rejected while streaming b
 response = await call(new Request(`${origin}/healthz`));
 assert.equal(response.status, 200, 'health checks verify all live D1 tables');
 assert.equal((await response.json()).payments.ready, false, 'health reports when payment delivery is intentionally unavailable');
+response = await call(new Request(`${origin}/healthz`, { method: 'HEAD' }));
+assert.equal(response.status, 200, 'HEAD health checks are supported for simple uptime monitors');
 const originalConsoleError = console.error;
 console.error = () => {};
 try {
@@ -160,6 +162,11 @@ assert.equal(genericCard.displayType, 'Formula Cheat Sheets');
 assert.deepEqual(genericCard.tags, ['physics', 'formula']);
 assert.equal(genericCard.metaTitle, 'JEE Physics Formula Sheet');
 
+response = await call(adminRequest('/api/admin/cards', 'POST', {
+  sectionId: formulaSection.id, title: 'Insecure preview link', link: 'http://example.test/preview.pdf'
+}, cookie));
+assert.equal(response.status, 400, 'admin preview links must use HTTPS');
+
 response = await call(adminRequest(`/api/admin/cards/${genericCard.id}`, 'PUT', { isPublished: true }, cookie));
 assert.equal(response.status, 200);
 
@@ -170,7 +177,7 @@ assert.match(collectionHtml, /<title>JEE Formula Cheat Sheets<\/title>/, 'collec
 assert.match(collectionHtml, /Fast JEE revision sheets\./, 'collection pages use the section meta description');
 assert.match(collectionHtml, /name="keywords" content="jee formulas, revision"/, 'collection pages use section SEO keywords');
 assert.match(collectionHtml, /Physics Formula Sheet/, 'collection pages include their published resources in the initial HTML');
-assert.match(collectionHtml, /src="\/analytics\.js"/, 'collection pages include shared privacy-respecting analytics');
+assert.match(collectionHtml, /src="\/analytics\.js(?:\?[^\"]*)?"/, 'collection pages include shared privacy-respecting analytics');
 response = await call(new Request(`${origin}/collection/jee`));
 assert.equal(response.status, 200);
 assert.match(await response.text(), new RegExp(`/collection/${formulaSection.slug}`), 'parent collection pages link to their public child collections');
@@ -195,6 +202,10 @@ response = await worker.fetch(new Request(`${origin}/api/papers/slug/${paidCard.
 assert.equal((await response.json()).paper.available, false, 'a configured-but-paused payment system never advertises a buyable PDF');
 response = await worker.fetch(new Request(`${origin}/paper/${paidCard.slug}`), configuredButPausedEnv);
 assert.match(await response.text(), /index,follow/, 'a published card remains indexable while sales are paused');
+response = await worker.fetch(new Request(`${origin}/collection/class-10-sample-papers`), configuredButPausedEnv);
+const pausedCollectionHtml = await response.text();
+assert.match(pausedCollectionHtml, new RegExp(`/paper/${paidCard.slug}`), 'a published card remains explorable from its collection while sales are paused');
+assert.match(pausedCollectionHtml, /secure checkout opens soon/, 'a paused collection explains that payment is not open instead of hiding the published price');
 response = await worker.fetch(new Request(`${origin}/healthz`), configuredButPausedEnv);
 assert.equal((await response.json()).payments.ready, false, 'health keeps sales closed until the explicit payment switch is enabled');
 response = await worker.fetch(jsonRequest(`/api/checkout/${paidCard.slug}`, { buyerEmail: 'student@example.test', buyerName: 'Test Student' }), configuredButPausedEnv);
@@ -209,6 +220,13 @@ assert.equal((await response.json()).code, 'PAYMENT_DELIVERY_UNAVAILABLE');
 const checkoutEnv = { ...configuredButPausedEnv, PAYMENTS_ENABLED: 'true' };
 response = await worker.fetch(new Request(`${origin}/healthz`), checkoutEnv);
 assert.equal((await response.json()).payments.ready, true, 'health reports when a complete payment setup has explicitly opened sales');
+response = await worker.fetch(new Request(`https://best-education.niosbest-tvl.workers.dev/api/checkout/${paidCard.slug}`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Origin: 'https://best-education.niosbest-tvl.workers.dev' },
+  body: JSON.stringify({ buyerEmail: 'student@example.test' })
+}), checkoutEnv);
+assert.equal(response.status, 403, 'the temporary workers.dev address cannot create a paid order');
+assert.equal((await response.json()).code, 'OFFICIAL_DOMAIN_REQUIRED');
 const originalFetch = globalThis.fetch;
 let fakeOrderNumber = 0;
 let firstCheckout;
@@ -435,6 +453,9 @@ response = await call(new Request(`${origin}/paper/${genericCard.slug}`));
 const paperHtml = await response.text();
 assert.match(paperHtml, /JEE Physics Formula Sheet/);
 assert.match(paperHtml, /Physics formula revision sheet/);
+assert.match(paperHtml, /<h1>Physics Formula Sheet<\/h1>/, 'paper pages include the resource title in the initial HTML');
+assert.match(paperHtml, /id="paper-data"/, 'paper pages include a safe payload for fast client hydration');
+assert.doesNotMatch(paperHtml, /fileKey/, 'paper hydration payload never exposes the protected storage key');
 
 response = await call(adminRequest(`/api/admin/orders/${verifiedOrder.razorpay_order_id}`, 'PUT', { markRefunded: true, refundNote: 'Smoke-test refund record' }, cookie));
 assert.equal(response.status, 200, 'admin can revoke/refund an order record without calling a payment provider');

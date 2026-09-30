@@ -86,7 +86,9 @@ function collectionLabel(paper) {
   return /^\d+$/.test(name) ? `Class ${name}` : name || 'Study resource';
 }
 function paperAction(paper) {
-  if (!paper.available) return '<span class="availability">Coming soon</span>';
+  if (!paper.available) {
+    return `<span class="availability">₹${escapeHTML(paper.price || '39')} · checkout opens soon</span><a href="${productUrl(paper.slug)}" aria-label="View ${escapeHTML(paper.title)}">→</a>`;
+  }
   return `<span>₹${escapeHTML(paper.price || '39')} PDF</span><a href="${productUrl(paper.slug)}" aria-label="View ${escapeHTML(paper.title)}">→</a>`;
 }
 function renderPapers(papers, message = '') {

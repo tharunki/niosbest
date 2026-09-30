@@ -33,13 +33,14 @@
     <link rel="stylesheet" href="accessibility.css" />
   </head>
   <body>
-    <header class="site-header"><div class="nav"><a class="brand" href="index.html"><img src="tk-solution-logo.png" alt="TK's SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain" />TK's <b>SOLUTION</b></a><a class="back" href="index.html"><span>←</span>Back to home</a></div></header>
-    <main>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header"><div class="nav"><a class="brand" href="index.html"><img src="tk-solution-logo-192.png" alt="TK's SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain" />TK's <b>SOLUTION</b></a><a class="back" href="index.html"><span>←</span>Back to home</a></div></header>
+    <main id="main">
       <section class="intro"><div><p class="eyebrow">Your study library</p><h1>Choose your path.</h1><p>Find resources by class, exam or topic. TK's SOLUTION adds new tiles as each collection is ready.</p></div></section>
-      <section class="catalog-library"><div><div class="catalog-toolbar"><div><p class="eyebrow">Explore resources</p><h2 id="catalog-heading">Study collections</h2><p id="catalog-note">Loading the study library…</p></div><button id="catalog-back" class="catalog-back" type="button" hidden>← All collections</button></div><div id="catalog-grid" class="catalog-grid" aria-live="polite" aria-busy="true"><div class="catalog-loading" aria-hidden="true"></div><div class="catalog-loading" aria-hidden="true"></div><div class="catalog-loading" aria-hidden="true"></div></div><noscript><p class="catalog-empty"><strong>Explore by resource type.</strong>JavaScript is needed for the interactive library. You can still browse <a href="sample-papers.html">sample papers</a>, <a href="pyqs.html">previous-year questions</a>, <a href="mcqs.html">MCQs</a> and <a href="important-questions.html">important questions</a>.</p></noscript></div></section>
+      <section class="catalog-library"><div><div class="catalog-toolbar"><div><p class="eyebrow">Explore resources</p><h2 id="catalog-heading">Study collections</h2><p id="catalog-note">Loading the study library…</p></div><button id="catalog-back" class="catalog-back" type="button" hidden>← All collections</button></div><div id="catalog-grid" class="catalog-grid" aria-live="polite" aria-busy="true"><div class="catalog-loading" aria-hidden="true"></div><div class="catalog-loading" aria-hidden="true"></div><div class="catalog-loading" aria-hidden="true"></div></div><noscript><p class="catalog-empty"><strong>Browse the study library.</strong> JavaScript is needed for interactive filters, but you can still open the server-rendered <a href="/collection/class-10">Class 10</a>, <a href="/collection/class-11">Class 11</a>, <a href="/collection/class-12">Class 12</a>, <a href="/collection/jee">JEE</a> and <a href="/collection/neet">NEET</a> collections.</p></noscript></div></section>
     </main>
     <footer><div><span>© 2026 TK's SOLUTION</span><a href="index.html">Home</a></div></footer>
-    <script src="catalog-browser.js"></script>
+    <script src="catalog-browser.js?v=20260930-paused-details"></script>
     <script src="analytics.js"></script>
   </body>
 </html>

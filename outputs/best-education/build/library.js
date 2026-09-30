@@ -61,7 +61,7 @@ setMeta('name', 'twitter:description', seoDescription);
 let canonical = document.head.querySelector('link[rel="canonical"]');
 if (!canonical) { canonical = document.createElement('link'); canonical.rel = 'canonical'; document.head.append(canonical); }
 canonical.href = `${seoOrigin}/${slugs[type]}`;
-document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="tk-solution-logo.png" alt="TK\'s SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">TK\'s <b>SOLUTION</b>'; });
+document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="tk-solution-logo-192.png" alt="TK\'s SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">TK\'s <b>SOLUTION</b>'; });
 
 const grid = document.querySelector('#library-grid');
 const courseNote = document.querySelector('#course-note');
@@ -251,7 +251,7 @@ function renderSubjects() {
 function purchaseAction(card, fallbackPrice, unitLabel) {
   if (!card) return '<span class="coming-soon">Coming soon</span>';
   if (!card.available) {
-    return `<span class="coming-soon">Published · secure checkout opens soon</span><a class="button" href="${productLink(card.slug)}">View details</a>`;
+    return `<span class="coming-soon">₹${escapeHTML(card.price || fallbackPrice)} · checkout opens soon</span><a class="button" href="${productLink(card.slug)}">View details</a>`;
   }
   return `<span class="price">₹${escapeHTML(card.price || fallbackPrice)}<small>${escapeHTML(unitLabel)}</small></span><a class="button" href="${productLink(card.slug)}">View details</a>`;
 }

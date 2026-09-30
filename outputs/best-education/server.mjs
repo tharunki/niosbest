@@ -24,6 +24,11 @@ const downloadSecret = process.env.DOWNLOAD_TOKEN_SECRET;
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
 const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
 const razorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+// This server is retained only for local development and a non-selling Render
+// preview. The production Worker is the sole approved payment and protected
+// download path, so a forgotten Render secret can never create a live order.
+const legacyPreviewOnly = true;
+const legacyPreviewPaymentMessage = 'Payments and protected PDF downloads are available only on the official TK\'s SOLUTION site.';
 const sessions = new Map();
 const loginAttempts = new Map();
 const sessionDuration = 12 * 60 * 60 * 1000;
@@ -296,7 +301,7 @@ function sectionChainIsPublished(sectionId, sections = readSections()) {
 function cardIsPublic(card, sections = readSections()) { return card.isPublished && sectionChainIsPublished(card.sectionId, sections); }
 function publicCard(card, sections = readSections()) {
   const { fileKey, isPublished, ...safe } = card;
-  return { ...safe, ...cardDisplay(card, sections), available:Boolean(fileKey) };
+  return { ...safe, ...cardDisplay(card, sections), available:Boolean(fileKey) && !legacyPreviewOnly };
 }
 function readPublicCards() {
   const sections = readSections();
@@ -478,14 +483,14 @@ function decodePdfUpload(input) {
   return pdf;
 }
 async function api(request, response, url) {
-  if (request.method === 'POST' && url.pathname === '/api/payment/webhook') return paymentWebhook(request, response);
+  if (request.method === 'POST' && url.pathname === '/api/payment/webhook') return json(response, 410, { error:legacyPreviewPaymentMessage });
   if (!sameOrigin(request)) return json(response, 403, { error:'Invalid origin' });
   if (request.method === 'GET' && url.pathname === '/healthz') return json(response, 200, { ok:true, storage:storageRoot });
   if (request.method === 'GET' && url.pathname === '/api/cards') return json(response, 200, { cards:readPublicCards() });
   if (request.method === 'GET' && url.pathname === '/api/catalog') return json(response, 200, publicCatalog());
   if (request.method === 'GET' && url.pathname === '/api/papers') return json(response, 200, { papers:filterPapers(url.searchParams) });
   const slugMatch = url.pathname.match(/^\/api\/papers\/slug\/([a-z0-9-]+)$/i); if (request.method === 'GET' && slugMatch) { const paper = findPaperBySlug(slugMatch[1]); return paper ? json(response, 200, { paper }) : json(response, 404, { error:'Paper not found.' }); }
-  const downloadMatch = url.pathname.match(/^\/api\/download\/([^/]+)$/); if (request.method === 'GET' && downloadMatch) return secureDownload(response, downloadMatch[1]);
+  const downloadMatch = url.pathname.match(/^\/api\/download\/([^/]+)$/); if (request.method === 'GET' && downloadMatch) return json(response, 410, { error:legacyPreviewPaymentMessage });
   if (request.method === 'GET' && url.pathname === '/api/admin/session') return json(response, 200, { authenticated:authenticated(request) });
   if (request.method === 'POST' && url.pathname === '/api/admin/login') {
     const address = request.socket.remoteAddress || 'unknown'; if (!loginAllowed(address)) return json(response, 429, { error:'Too many attempts. Try again later.' }); const input = await body(request).catch(() => ({})); if (!constantTimeEqual(input.password || '', adminPassword)) { loginAttempts.get(address).push(Date.now()); return json(response, 401, { error:'Incorrect password.' }); }
@@ -494,10 +499,12 @@ async function api(request, response, url) {
   if (request.method === 'POST' && url.pathname === '/api/admin/logout') { const token = cookies(request).admin_session; if (token) sessions.delete(token); return json(response, 200, { ok:true }, { 'Set-Cookie':'admin_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' }); }
   const checkoutMatch = url.pathname.match(/^\/api\/checkout\/([a-z0-9-]+)$/i);
   if (request.method === 'POST' && checkoutMatch) {
+    if (legacyPreviewOnly) return json(response, 503, { error:legacyPreviewPaymentMessage });
     const paper = findPaperBySlug(checkoutMatch[1]); const card = paper && getCard(paper.id); if (!card?.fileKey || !cardIsPublic(card)) return json(response, 404, { error:'This paper is not ready for secure purchase yet.' }); if (!razorpayKeyId || !razorpayKeySecret) return json(response, 503, { error:'Secure payments are not configured yet. The administrator must add Razorpay credentials.' });
     const receipt = `best_${randomUUID().replace(/-/g, '').slice(0, 30)}`; const upstream = await fetch('https://api.razorpay.com/v1/orders', { method:'POST', headers:{ Authorization:`Basic ${Buffer.from(`${razorpayKeyId}:${razorpayKeySecret}`).toString('base64')}`, 'Content-Type':'application/json' }, body:JSON.stringify({ amount:Number(card.price) * 100, currency:'INR', receipt, notes:{ card_id:card.id, slug:card.slug } }) }); const order = await upstream.json().catch(() => ({})); if (!upstream.ok || !order.id) return json(response, 502, { error:'The payment service could not create an order. Please try again.' }); saveOrder({ orderId:order.id, cardId:card.id, amount:Number(order.amount), currency:order.currency || 'INR', expiresAt:new Date(Date.now() + 30 * 60 * 1000).toISOString() }); return json(response, 200, { key:razorpayKeyId, order:{ id:order.id, amount:order.amount, currency:order.currency }, paper:publicCard(card) });
   }
   if (request.method === 'POST' && url.pathname === '/api/payment/verify') {
+    if (legacyPreviewOnly) return json(response, 503, { error:legacyPreviewPaymentMessage });
     try { const input = await body(request); const order = getOrder(input.razorpay_order_id); const expected = createHmac('sha256', razorpayKeySecret || '').update(`${input.razorpay_order_id}|${input.razorpay_payment_id}`).digest('hex'); if (!order || new Date(order.expires_at).getTime() < Date.now() || !constantTimeEqual(input.razorpay_signature || '', expected)) throw new Error('Payment verification failed.'); const card = getCard(order.card_id); if (!card?.fileKey || !cardIsPublic(card)) throw new Error('The requested PDF is unavailable.'); const payment = await razorpayPayment(order, input.razorpay_payment_id); updateOrderStatus(order.razorpay_order_id, 'fulfilled', payment.id, true); return json(response, 200, { ok:true, downloadUrl:`/api/download/${signedDownloadToken(card)}`, expiresAt:new Date(Date.now() + downloadDuration).toISOString() }); } catch (error) { return json(response, 400, { error:error.message || 'Payment verification failed.' }); }
   }
   if (!authenticated(request)) return json(response, 401, { error:'Sign in required.' });
@@ -598,7 +605,7 @@ function paperRouteHtml(paper) {
   const title = `${paper.title} | TK's SOLUTION`;
   const description = paper.description || 'Chapter-wise study material for focused revision.';
   const indexable = Boolean(paper.available) && siteUrl.startsWith('https://');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeXml(title)}</title><meta name="description" content="${escapeXml(description)}"><link rel="canonical" href="${escapeXml(`${siteUrl}/paper/${paper.slug}`)}"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"></head><body><header><a class="brand" href="/index.html"><img src="/tk-solution-logo.png" alt="TK's SOLUTION logo" width="46" height="46">TK's <strong>SOLUTION</strong></a><a href="/library.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeXml(title)}</title><meta name="description" content="${escapeXml(description)}"><link rel="canonical" href="${escapeXml(`${siteUrl}/paper/${paper.slug}`)}"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"></head><body><header><a class="brand" href="/index.html"><img src="/tk-solution-logo-192.png" alt="TK's SOLUTION logo" width="46" height="46">TK's <strong>SOLUTION</strong></a><a href="/library.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script></body></html>`;
 }
 const mime = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.png':'image/png', '.svg':'image/svg+xml', '.xml':'application/xml; charset=utf-8', '.txt':'text/plain; charset=utf-8', '.json':'application/json; charset=utf-8' };
 function sendStatic(request, response, content, contentType, cacheControl) {

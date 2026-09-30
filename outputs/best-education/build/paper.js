@@ -75,6 +75,17 @@ function updateDocumentMetadata(paper) {
   if (keywords) setMeta('name', 'keywords', keywords);
 }
 
+function embeddedPaper() {
+  const source = document.querySelector('#paper-data');
+  if (!source?.textContent) return null;
+  try {
+    const paper = JSON.parse(source.textContent);
+    return paper && typeof paper === 'object' && !Array.isArray(paper) && typeof paper.slug === 'string' ? paper : null;
+  } catch {
+    return null;
+  }
+}
+
 async function request(url, options = {}) {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -336,8 +347,12 @@ function renderPaper(paper) {
 
 async function loadPaper() {
   try {
-    const data = await request(`/api/papers/slug/${encodeURIComponent(slug)}`);
-    const paper = data.paper;
+    // The Worker embeds a safe public-card payload in the first HTML response.
+    // Use it first so the detail page is readable immediately and stays useful
+    // if the catalogue API is briefly unavailable after page delivery.
+    const initialPaper = embeddedPaper();
+    const data = initialPaper ? null : await request(`/api/papers/slug/${encodeURIComponent(slug)}`);
+    const paper = initialPaper || data?.paper;
     if (!paper || !paper.slug) throw new Error('Paper not found.');
     updateDocumentMetadata(paper);
     renderPaper(paper);

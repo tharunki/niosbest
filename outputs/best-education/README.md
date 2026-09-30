@@ -57,7 +57,7 @@ This is the version to use for a low-cost launch. The Worker source is in `cloud
 
    Use a unique admin password of at least 12 characters and a separate random download secret of at least 32 characters. Enter the Supabase Project URL for `SUPABASE_URL` and the Supabase Secret key for `SUPABASE_SECRET_KEY`. The Worker creates and verifies the private `tks-papers` bucket when an authenticated admin first opens the PDF library, restricting it to PDFs up to 25 MB. If you create it manually, keep it private; the Worker repairs the PDF/size restriction before an upload. Start with Razorpay **Test** keys. Enter `false` for `PAYMENTS_ENABLED` while setting up the site: PDFs stay visible as “coming soon” and cannot be bought until this deliberate sales switch is changed to `true`.
 
-7. Deploy with `npx wrangler deploy`. Test the temporary `workers.dev` address first. It is deliberately marked `noindex`, so it will not compete with the final site in search results.
+7. Deploy with `npx wrangler deploy`. Test browsing and admin access on the temporary `workers.dev` address first. It is deliberately marked `noindex`, so it will not compete with the final site in search results; it also deliberately rejects checkout, payment recovery and protected downloads. Test a real payment only on the final custom domain.
 8. After testing the admin upload, a test purchase, a verified download, and the Razorpay webhook, attach the final custom domain and replace test Razorpay credentials with Live credentials. Set the webhook endpoint to:
 
    ```text
@@ -76,7 +76,7 @@ The Worker streams each purchased PDF from the private bucket only after it rech
 
 ## Legacy Node / Render fallback
 
-`server.mjs` and `render.yaml` are retained only to support local development and non-payment previews. Do **not** deploy them for live paid sales, attach Razorpay Live credentials, upload paid PDFs, or point the production domain at them. The Cloudflare Worker is the production path because it includes persistent admin sessions, payment recovery, protected-file change guards, server-side filtering, checkout throttling, and per-paper SEO.
+`server.mjs` and `render.yaml` are retained only to support local development and non-payment previews. The legacy server now rejects checkout, payment verification, webhooks and protected downloads even if old payment secrets remain configured. Do **not** deploy it for live paid sales, attach Razorpay Live credentials, upload paid PDFs, or point the production domain at it. The Cloudflare Worker is the production path because it includes persistent admin sessions, payment recovery, protected-file change guards, server-side filtering, checkout throttling, and per-paper SEO.
 
 If you later need a Render-based paid deployment, backport and test those protections before using it. Keep the repository private and continue to exclude `papers/`, database files, and secrets from Git.
 

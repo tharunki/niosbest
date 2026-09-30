@@ -67,7 +67,7 @@ function sectionIcon(section) { return section.icon || '📚'; }
 function sectionHref(section) { return section?.slug ? `/collection/${encodeURIComponent(section.slug)}` : '/library.html'; }
 
 function resourceAction(card) {
-  if (!card.available) return '<span class="coming-soon">Coming soon</span>';
+  if (!card.available) return `<span class="coming-soon">Secure checkout opens soon</span><a class="button" href="/paper/${encodeURIComponent(card.slug)}">View details</a>`;
   return `<a class="button" href="/paper/${encodeURIComponent(card.slug)}">View details</a>`;
 }
 
@@ -149,7 +149,7 @@ function renderResources(section) {
     bindTagFilters(section);
     return;
   }
-  catalogGrid.innerHTML = tagFilterMarkup(filterTags) + resources.map((card) => `<article class="catalog-resource"><span class="chapter">${escapeHTML(card.resourceLabel || card.type || 'Study resource')}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || "Focused study material from TK's SOLUTION.")}</p>${tagMarkup(card)}<div class="buy"><span class="price">${card.available ? `₹${escapeHTML(card.price || '39')}<small>${card.isBundle ? 'full bundle' : 'secure PDF'}</small>` : ''}</span>${resourceAction(card)}</div></article>`).join('');
+  catalogGrid.innerHTML = tagFilterMarkup(filterTags) + resources.map((card) => `<article class="catalog-resource"><span class="chapter">${escapeHTML(card.resourceLabel || card.type || 'Study resource')}</span><h3>${escapeHTML(card.title)}</h3><p>${escapeHTML(card.description || "Focused study material from TK's SOLUTION.")}</p>${tagMarkup(card)}<div class="buy"><span class="price">₹${escapeHTML(card.price || '39')}<small>${card.available ? (card.isBundle ? 'full bundle' : 'secure PDF') : 'secure checkout opens soon'}</small></span>${resourceAction(card)}</div></article>`).join('');
   bindTagFilters(section);
 }
 

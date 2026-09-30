@@ -34,7 +34,7 @@ setMeta('name', 'twitter:image', 'https://tksolutions.in/tk-solution-social-card
 setMeta('name', 'twitter:title', seoTitle);
 setMeta('name', 'twitter:description', seoDescription);
 const canonical = document.createElement('link'); canonical.rel = 'canonical'; canonical.href = `https://tksolutions.in/${slugs[type]}`; document.head.append(canonical);
-document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="tk-solution-logo.png" alt="TK\'s SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">TK\'s <b>SOLUTION</b>'; });
+document.querySelectorAll('.brand').forEach((brand) => { brand.innerHTML = '<img src="tk-solution-logo-192.png" alt="TK\'s SOLUTION logo" width="46" height="46" decoding="async" style="width:46px;height:46px;object-fit:contain">TK\'s <b>SOLUTION</b>'; });
 
 const grid = document.querySelector('#library-grid');
 const courseNote = document.querySelector('#course-note');

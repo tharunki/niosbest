@@ -28,6 +28,7 @@ const FEEDBACK_WINDOW_MS = 15 * 60 * 1000;
 const MAX_FEEDBACK_SUBMISSIONS = 5;
 const CANONICAL_SITE_HOST = 'tksolutions.in';
 const CANONICAL_SITE_WWW_HOST = `www.${CANONICAL_SITE_HOST}`;
+const PUBLIC_READ_CACHE_CONTROL = 'public, max-age=60, s-maxage=300, stale-while-revalidate=600';
 const ALLOWED_TYPES = new Set(['sample', 'pyq', 'mcq', 'important']);
 const ALLOWED_CLASSES = new Set(['10', '11', '12']);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -82,6 +83,16 @@ function json(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...securityHeaders(), 'Cache-Control': 'no-store', ...extraHeaders }
+  });
+}
+
+// Catalogue reads contain no protected file keys and are identical for every
+// visitor. A short browser cache and longer edge revalidation window reduce
+// D1 work without making an admin publish feel delayed for long.
+function publicJson(body, status = 200, extraHeaders = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...securityHeaders(), 'Cache-Control': PUBLIC_READ_CACHE_CONTROL, ...extraHeaders }
   });
 }
 
@@ -406,7 +417,8 @@ function secureStaticPage(response, request) {
   for (const [name, value] of Object.entries(securityHeaders())) {
     if (name !== 'Content-Type') headers.set(name, value);
   }
-  if (isWorkersDev(request.url)) headers.set('X-Robots-Tag', 'noindex, nofollow');
+  const pathname = new URL(request.url).pathname;
+  if (isWorkersDev(request.url) || pathname === '/admin' || pathname === '/admin.html') headers.set('X-Robots-Tag', 'noindex, nofollow');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -415,9 +427,13 @@ function secureStaticPage(response, request) {
 // checkout/admin script stuck on a device for days.
 function cacheStaticAsset(response, request) {
   const headers = new Headers(response.headers);
-  const pathname = new URL(request.url).pathname;
+  const url = new URL(request.url);
+  const pathname = url.pathname;
   if (response.ok && /\.(?:css|js|png|jpe?g|webp|avif|svg|ico|woff2?)$/i.test(pathname)) {
-    headers.set('Cache-Control', 'public, max-age=3600');
+    // A versioned URL is a new immutable resource. Keep legacy unversioned
+    // files short-lived so a future edit cannot leave a checkout UI stale.
+    const immutable = url.searchParams.has('v') || pathname.endsWith('/tk-solution-logo-192.png');
+    headers.set('Cache-Control', immutable ? 'public, max-age=31536000, immutable' : 'public, max-age=3600');
   }
   if (isWorkersDev(request.url)) headers.set('X-Robots-Tag', 'noindex, nofollow');
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
@@ -524,9 +540,23 @@ function parseCookies(request) {
   return cookies;
 }
 
+function isLocalOrTestHost(request) {
+  try {
+    const hostname = new URL(request.url).hostname.toLowerCase();
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname.endsWith('.test');
+  } catch {
+    return false;
+  }
+}
+
 function validSameOrigin(request) {
+  // Safe reads do not need an Origin header. Browser state changes do: this
+  // keeps cookie-authenticated admin and payment actions fail-closed while
+  // retaining the isolated .test/local hosts used by automated smoke tests.
+  if (!['POST', 'PUT', 'DELETE', 'PATCH'].includes(request.method)) return true;
   const origin = request.headers.get('Origin');
-  return !origin || origin === new URL(request.url).origin;
+  if (!origin) return isLocalOrTestHost(request);
+  return origin === new URL(request.url).origin;
 }
 
 function declaredContentLength(request) {
@@ -1160,7 +1190,7 @@ async function cleanCard(env, input, existing = null, storageContext = null) {
   }
   if (link) {
     const url = new URL(link);
-    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid preview link.');
+    if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Preview links must use HTTPS.');
     link = url.href;
   }
   if (fileKey) {
@@ -1229,7 +1259,7 @@ function cleanImportedCard(input, usedSlugs, pdfFiles, sectionContexts) {
   }
   if (link) {
     const url = new URL(link);
-    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('The backup contains an invalid preview link.');
+    if (url.protocol !== 'https:' || url.username || url.password) throw new Error('The backup contains a preview link that does not use HTTPS.');
     link = url.href;
   }
   if (fileKey) {
@@ -2544,6 +2574,21 @@ function isWorkersDev(url) {
   return new URL(url).hostname.endsWith('.workers.dev');
 }
 
+function isOfficialPaymentHost(request) {
+  try {
+    const hostname = new URL(request.url).hostname.toLowerCase();
+    // The isolated test and local hosts never resolve publicly. They keep the
+    // Worker testable without allowing the workers.dev preview to take sales.
+    return hostname === CANONICAL_SITE_HOST || isLocalOrTestHost(request);
+  } catch {
+    return false;
+  }
+}
+
+function officialPaymentHostResponse() {
+  return json({ error: `Secure checkout is available only on ${CANONICAL_SITE_HOST}.`, code: 'OFFICIAL_DOMAIN_REQUIRED' }, 403);
+}
+
 async function renderStaticPage(request, env) {
   const assetUrl = new URL(request.url);
   const aliasTarget = staticPageAliases.get(assetUrl.pathname);
@@ -2572,12 +2617,8 @@ function collectionChildMarkup(section) {
 
 function collectionResourceMarkup(card) {
   const label = card.resourceLabel || card.displayType || card.type || 'Study resource';
-  const action = card.available
-    ? `<a class="collection-action" href="/paper/${encodeURIComponent(card.slug)}">View details <span aria-hidden="true">→</span></a>`
-    : '<span class="collection-pending">Secure PDF coming soon</span>';
-  const price = card.available
-    ? `<span class="collection-price">₹${escapeHtml(card.price || '39')}<small>${card.isBundle ? 'full bundle' : 'secure PDF'}</small></span>`
-    : '';
+  const action = `<a class="collection-action" href="/paper/${encodeURIComponent(card.slug)}">View details <span aria-hidden="true">→</span></a>`;
+  const price = `<span class="collection-price">₹${escapeHtml(card.price || '39')}<small>${card.available ? (card.isBundle ? 'full bundle' : 'secure PDF') : 'secure checkout opens soon'}</small></span>`;
   return `<article class="collection-resource">
     <p class="collection-resource-label">${escapeHtml(label)}</p>
     <h3>${escapeHtml(card.title)}</h3>
@@ -2587,7 +2628,30 @@ function collectionResourceMarkup(card) {
   </article>`;
 }
 
-function collectionPageHtml(request, collection) {
+function safeJsonForHtml(value) {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (character) => {
+    if (character === '<') return '\\u003c';
+    if (character === '>') return '\\u003e';
+    if (character === '&') return '\\u0026';
+    if (character === '\u2028') return '\\u2028';
+    return '\\u2029';
+  });
+}
+
+function paperPageContent(paper) {
+  const className = String(paper.displayClassName || paper.className || '').trim();
+  const classLabel = /^\d+$/.test(className) ? `Class ${className}` : className || 'Study resource';
+  const material = String(paper.displayType || paper.type || 'Study material').toUpperCase();
+  const tags = Array.isArray(paper.tags) && paper.tags.length
+    ? paper.tags.map((tag) => `<span>${escapeHtml(tag)}</span>`).join('')
+    : '';
+  const availability = paper.available
+    ? 'Loading secure checkout…'
+    : 'Secure checkout opens soon. You can still review the resource details.';
+  return `<p class="eyebrow">${escapeHtml(classLabel)} · ${escapeHtml(paper.subject)} · ${escapeHtml(material)}</p><h1>${escapeHtml(paper.title)}</h1><p>${escapeHtml(paper.description || 'Chapter-wise study material for focused revision.')}</p><div class="meta"><span>Secure access</span><span>PDF material</span>${tags}</div><p class="price">₹${escapeHtml(paper.price || '39')}</p><p class="notice">${availability}</p>`;
+}
+
+function collectionPageShellHtml(request, collection) {
   const origin = new URL(request.url).origin;
   const { section, children, cards } = collection;
   const canonical = `${origin}${collectionUrl(section.slug)}`;
@@ -2608,7 +2672,7 @@ function collectionPageHtml(request, collection) {
       name: card.title,
       description: card.description || "Study material from TK's SOLUTION.",
       url: `${origin}/paper/${card.slug}`,
-      offers: { '@type': 'Offer', price: card.price, priceCurrency: 'INR', availability: card.available ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder' }
+      ...(card.available ? { offers: { '@type': 'Offer', price: card.price, priceCurrency: 'INR', availability: 'https://schema.org/InStock' } } : {})
     }))
   ];
   const collectionSchema = JSON.stringify({
@@ -2645,13 +2709,21 @@ function collectionPageHtml(request, collection) {
   </section>` : '';
   const emptyState = !children.length && !cards.length ? `<section class="collection-empty"><strong>This collection is being prepared.</strong><p>TK's SOLUTION will add verified study materials here as they are published.</p><a href="/library.html">Browse every collection</a></section>` : '';
   const parentLabel = section.parentId ? escapeHtml(section.parentTitle) : "TK's SOLUTION study library";
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}">${keywords ? `<meta name="keywords" content="${escapeHtml(keywords)}">` : ''}<link rel="canonical" href="${escapeHtml(canonical)}"><meta property="og:type" content="website"><meta property="og:site_name" content="TK's SOLUTION"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonical)}"><meta property="og:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta property="og:image:alt" content="TK's SOLUTION study materials"><meta property="og:image:width" content="1672"><meta property="og:image:height" content="941"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta name="twitter:image:alt" content="TK's SOLUTION study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/collection.css"><script type="application/ld+json">${collectionSchema}</script></head><body><header class="collection-header"><div><a class="collection-brand" href="/index.html"><img src="/tk-solution-logo.png" alt="TK's SOLUTION logo" width="46" height="46">TK's <strong>SOLUTION</strong></a><a class="collection-library-link" href="/library.html">Study library</a></div></header><main class="collection-page"><nav class="collection-breadcrumb" aria-label="Breadcrumb">${breadcrumbMarkup}</nav><section class="collection-hero"><span class="collection-hero-icon" aria-hidden="true">${escapeHtml(section.icon || '📚')}</span><p class="eyebrow">${parentLabel}</p><h1>${escapeHtml(section.title)}</h1><p>${escapeHtml(description)}</p>${collectionTagMarkup(section.tags)}</section>${childSection}${resourceSection}${emptyState}</main><footer class="collection-footer"><div><div><span>© 2026 TK's SOLUTION</span><span>Run by Sumathy Manoharan since 2001</span></div><nav aria-label="Footer"><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms &amp; purchases</a><a href="mailto:sumathynl.maths@gmail.com">Contact</a></nav></div></footer><script src="/analytics.js"></script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}">${keywords ? `<meta name="keywords" content="${escapeHtml(keywords)}">` : ''}<link rel="canonical" href="${escapeHtml(canonical)}"><meta property="og:type" content="website"><meta property="og:site_name" content="TK's SOLUTION"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(canonical)}"><meta property="og:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta property="og:image:alt" content="TK's SOLUTION study materials"><meta property="og:image:width" content="1672"><meta property="og:image:height" content="941"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta name="twitter:image:alt" content="TK's SOLUTION study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/collection.css"><script type="application/ld+json">${collectionSchema}</script></head><body><header class="collection-header"><div><a class="collection-brand" href="/index.html"><img src="/tk-solution-logo-192.png" alt="TK's SOLUTION logo" width="46" height="46">TK's <strong>SOLUTION</strong></a><a class="collection-library-link" href="/library.html">Study library</a></div></header><main class="collection-page"><nav class="collection-breadcrumb" aria-label="Breadcrumb">${breadcrumbMarkup}</nav><section class="collection-hero"><span class="collection-hero-icon" aria-hidden="true">${escapeHtml(section.icon || '📚')}</span><p class="eyebrow">${parentLabel}</p><h1>${escapeHtml(section.title)}</h1><p>${escapeHtml(description)}</p>${collectionTagMarkup(section.tags)}</section>${childSection}${resourceSection}${emptyState}</main><footer class="collection-footer"><div><div><span>© 2026 TK's SOLUTION</span><span>Run by Sumathy Manoharan since 2001</span></div><nav aria-label="Footer"><a href="/privacy.html">Privacy</a><a href="/terms.html">Terms &amp; purchases</a><a href="mailto:sumathynl.maths@gmail.com">Contact</a></nav></div></footer><script src="/analytics.js"></script></body></html>`;
+}
+
+function collectionPageHtml(request, collection) {
+  return collectionPageShellHtml(request, collection)
+    .replace('<link rel="stylesheet" href="/collection.css">', '<link rel="stylesheet" href="/collection.css?v=20260930-ssr"><link rel="stylesheet" href="/accessibility.css?v=20260930-ssr">')
+    .replace('<body>', '<body><a class="skip-link" href="#main">Skip to content</a>')
+    .replace('<main class="collection-page">', '<main id="main" class="collection-page">')
+    .replace('<script src="/analytics.js"></script>', '<script src="/analytics.js?v=20260930-ssr"></script>');
 }
 
 async function renderCollectionPage(request, env, slug) {
   const collection = await publicCollection(env, slug);
   if (!collection) return text('Not found', 404);
-  return text(collectionPageHtml(request, collection), 200, 'text/html; charset=utf-8');
+  return text(collectionPageHtml(request, collection), 200, 'text/html; charset=utf-8', { 'Cache-Control': PUBLIC_READ_CACHE_CONTROL });
 }
 
 function sitemapEntry(origin, path, updatedAt = '') {
@@ -2679,11 +2751,11 @@ function renderRobots(request) {
   const origin = new URL(request.url).origin;
   const content = isWorkersDev(request.url)
     ? 'User-agent: *\nDisallow: /\n'
-    : `User-agent: *\nAllow: /\nDisallow: /admin.html\nDisallow: /api/\nSitemap: ${origin}/sitemap.xml\n`;
+    : `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /admin.html\nDisallow: /api/\nSitemap: ${origin}/sitemap.xml\n`;
   return text(content, 200, 'text/plain; charset=utf-8');
 }
 
-function paperPageHtml(request, paper) {
+function paperPageShellHtml(request, paper) {
   const origin = new URL(request.url).origin;
   const title = paper.metaTitle || `${paper.title} | TK's SOLUTION`;
   const description = paper.metaDescription || paper.description || 'Chapter-wise study material for focused revision.';
@@ -2704,15 +2776,24 @@ function paperPageHtml(request, paper) {
     educationalLevel,
     learningResourceType,
     provider: { '@type': 'EducationalOrganization', name: "TK's SOLUTION" },
-    offers: { '@type': 'Offer', price: paper.price, priceCurrency: 'INR', availability: paper.available ? 'https://schema.org/InStock' : 'https://schema.org/PreOrder', url: `${origin}/paper/${paper.slug}` }
+    ...(paper.available ? { offers: { '@type': 'Offer', price: paper.price, priceCurrency: 'INR', availability: 'https://schema.org/InStock', url: `${origin}/paper/${paper.slug}` } } : {})
   }).replace(/</g, '\\u003c');
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}">${keywords ? `<meta name="keywords" content="${escapeHtml(keywords)}">` : ''}<link rel="canonical" href="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:type" content="product"><meta property="og:site_name" content="TK's SOLUTION"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta property="og:image:alt" content="TK's SOLUTION study materials"><meta property="og:image:width" content="1672"><meta property="og:image:height" content="941"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta name="twitter:image:alt" content="TK's SOLUTION study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"><script type="application/ld+json">${productSchema}</script></head><body><header><a class="brand" href="/index.html"><img src="/tk-solution-logo.png" alt="TK's SOLUTION logo" width="46" height="46">TK's <strong>SOLUTION</strong></a><a href="/index.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script><script src="/analytics.js"></script></body></html>`;
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="${indexable ? 'index,follow' : 'noindex,nofollow'}"><title>${escapeHtml(title)}</title><meta name="description" content="${escapeHtml(description)}">${keywords ? `<meta name="keywords" content="${escapeHtml(keywords)}">` : ''}<link rel="canonical" href="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:type" content="product"><meta property="og:site_name" content="TK's SOLUTION"><meta property="og:title" content="${escapeHtml(title)}"><meta property="og:description" content="${escapeHtml(description)}"><meta property="og:url" content="${escapeHtml(`${origin}/paper/${paper.slug}`)}"><meta property="og:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta property="og:image:alt" content="TK's SOLUTION study materials"><meta property="og:image:width" content="1672"><meta property="og:image:height" content="941"><meta property="og:image:type" content="image/png"><meta name="twitter:card" content="summary_large_image"><meta name="twitter:title" content="${escapeHtml(title)}"><meta name="twitter:description" content="${escapeHtml(description)}"><meta name="twitter:image" content="${escapeHtml(`${origin}/tk-solution-social-card.png`)}"><meta name="twitter:image:alt" content="TK's SOLUTION study materials"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,700&display=swap" rel="stylesheet"><link rel="stylesheet" href="/paper.css"><script type="application/ld+json">${productSchema}</script></head><body><header><a class="brand" href="/index.html"><img src="/tk-solution-logo-192.png" alt="TK's SOLUTION logo" width="46" height="46">TK's <strong>SOLUTION</strong></a><a href="/index.html">Back to library</a></header><main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main><script src="/paper.js"></script><script src="/analytics.js"></script></body></html>`;
+}
+
+function paperPageHtml(request, paper) {
+  const embeddedPaper = safeJsonForHtml(paper);
+  return paperPageShellHtml(request, paper)
+    .replace('<link rel="stylesheet" href="/paper.css">', '<link rel="stylesheet" href="/paper.css?v=20260930-ssr"><link rel="stylesheet" href="/accessibility.css?v=20260930-ssr">')
+    .replace('<body>', '<body><a class="skip-link" href="#main">Skip to content</a>')
+    .replace('<main><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite"><div class="loading-block"></div><div class="loading-block short"></div></div></main>', `<main id="main"><p class="eyebrow">Secure study material</p><div id="paper-detail" class="paper-detail" aria-live="polite">${paperPageContent(paper)}</div></main>`)
+    .replace('<script src="/paper.js"></script><script src="/analytics.js"></script>', `<script id="paper-data" type="application/json">${embeddedPaper}</script><script src="/paper.js?v=20260930-ssr"></script><script src="/analytics.js?v=20260930-ssr"></script>`);
 }
 
 async function renderPaperPage(request, env, slug) {
   const paper = await findPaperBySlug(env, slug);
   if (!paper) return text('Not found', 404);
-  return text(paperPageHtml(request, paper), 200, 'text/html; charset=utf-8');
+  return text(paperPageHtml(request, paper), 200, 'text/html; charset=utf-8', { 'Cache-Control': PUBLIC_READ_CACHE_CONTROL });
 }
 
 async function api(request, env, url) {
@@ -2723,9 +2804,9 @@ async function api(request, env, url) {
     if (request.method !== 'POST') return methodNotAllowed('POST');
     return paymentWebhook(request, env);
   }
-  if (!['GET', 'POST', 'PUT', 'DELETE'].includes(request.method)) return methodNotAllowed('GET, POST, PUT, DELETE');
+  if (!['GET', 'HEAD', 'POST', 'PUT', 'DELETE'].includes(request.method)) return methodNotAllowed('GET, HEAD, POST, PUT, DELETE');
   if (!validSameOrigin(request)) return json({ error: 'Invalid origin.' }, 403);
-  if (request.method === 'GET' && url.pathname === '/healthz') {
+  if ((request.method === 'GET' || request.method === 'HEAD') && url.pathname === '/healthz') {
     try {
       // Check the tables used by the live paths, not just the D1 connection.
       // A deployment without the latest migration must fail health checks.
@@ -2743,22 +2824,28 @@ async function api(request, env, url) {
         env.DB.prepare('SELECT 1 FROM analytics_attempts LIMIT 1').first(),
         env.DB.prepare('SELECT 1 FROM feedback_attempts LIMIT 1').first()
       ]);
-      return json({ ok: true, platform: 'cloudflare', payments: { ready: canAcceptNewPayments(env) } });
+      const body = { ok: true, platform: 'cloudflare', payments: { ready: canAcceptNewPayments(env) } };
+      return request.method === 'HEAD'
+        ? new Response(null, { status: 200, headers: { ...securityHeaders(), 'Cache-Control': 'no-store' } })
+        : json(body);
     } catch (error) {
       console.error("TK's SOLUTION database health check failed", error);
-      return json({ ok: false, error: 'Database migration or connection is unavailable.' }, 503);
+      const body = { ok: false, error: 'Database migration or connection is unavailable.' };
+      return request.method === 'HEAD'
+        ? new Response(null, { status: 503, headers: { ...securityHeaders(), 'Cache-Control': 'no-store' } })
+        : json(body, 503);
     }
   }
-  if (request.method === 'GET' && url.pathname === '/api/catalog') return json(await publicCatalog(env));
+  if (request.method === 'GET' && url.pathname === '/api/catalog') return publicJson(await publicCatalog(env));
   if (request.method === 'GET' && url.pathname === '/api/cards') {
     const paymentDeliveryReady = canAcceptNewPayments(env);
-    return json({ cards: (await filteredCards(env, url.searchParams)).map((card) => publicCard(card, paymentDeliveryReady)) });
+    return publicJson({ cards: (await filteredCards(env, url.searchParams)).map((card) => publicCard(card, paymentDeliveryReady)) });
   }
-  if (request.method === 'GET' && url.pathname === '/api/papers') return json({ papers: await filterPapers(env, url.searchParams) });
+  if (request.method === 'GET' && url.pathname === '/api/papers') return publicJson({ papers: await filterPapers(env, url.searchParams) });
   const slugMatch = url.pathname.match(/^\/api\/papers\/slug\/([a-z0-9-]+)$/i);
   if (request.method === 'GET' && slugMatch) {
     const paper = await findPaperBySlug(env, slugMatch[1]);
-    return paper ? json({ paper }) : json({ error: 'Paper not found.' }, 404);
+    return paper ? publicJson({ paper }) : json({ error: 'Paper not found.' }, 404);
   }
   if (request.method === 'POST' && url.pathname === '/api/analytics/visit') {
     try {
@@ -2779,7 +2866,9 @@ async function api(request, env, url) {
     } catch (error) { return apiErrorResponse(error, 'Feedback could not be sent.'); }
   }
   const downloadMatch = url.pathname.match(/^\/api\/download\/([^/]+)$/);
-  if (request.method === 'GET' && downloadMatch) return secureDownload(request, env, downloadMatch[1]);
+  if (request.method === 'GET' && downloadMatch) return isOfficialPaymentHost(request)
+    ? secureDownload(request, env, downloadMatch[1])
+    : officialPaymentHostResponse();
   if (request.method === 'GET' && url.pathname === '/api/admin/session') return json({ authenticated: await authenticated(request, env) });
   if (request.method === 'POST' && url.pathname === '/api/admin/login') {
     if (!env.ADMIN_PASSWORD || String(env.ADMIN_PASSWORD).length < 12) return json({ error: 'Admin authentication is not configured yet.' }, 503);
@@ -2804,6 +2893,7 @@ async function api(request, env, url) {
   }
   const checkoutMatch = url.pathname.match(/^\/api\/checkout\/([a-z0-9-]+)$/i);
   if (request.method === 'POST' && checkoutMatch) {
+    if (!isOfficialPaymentHost(request)) return officialPaymentHostResponse();
     if (!hasPaperStorage(env)) return paperStorageUnavailableResponse();
     let buyer;
     try { buyer = cleanCheckoutBuyer(await readOptionalJson(request)); }
@@ -2843,6 +2933,7 @@ async function api(request, env, url) {
     });
   }
   if (request.method === 'POST' && url.pathname === '/api/payment/verify') {
+    if (!isOfficialPaymentHost(request)) return officialPaymentHostResponse();
     if (!hasPaymentDeliveryConfiguration(env)) return paymentDeliveryUnavailableResponse(env);
     try {
       const input = await readJson(request);
@@ -2863,6 +2954,7 @@ async function api(request, env, url) {
     } catch (error) { return apiErrorResponse(error, 'Payment verification failed.'); }
   }
   if (request.method === 'POST' && url.pathname === '/api/payment/recover') {
+    if (!isOfficialPaymentHost(request)) return officialPaymentHostResponse();
     if (!hasPaymentDeliveryConfiguration(env)) return paymentDeliveryUnavailableResponse(env);
     try {
       const input = await readJson(request);

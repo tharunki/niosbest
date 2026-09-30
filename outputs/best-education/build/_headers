@@ -15,5 +15,8 @@
 /*.png
   Cache-Control: public, max-age=3600
 
+/tk-solution-logo-192.png
+  Cache-Control: public, max-age=31536000, immutable
+
 https://:worker.:account.workers.dev/*
   X-Robots-Tag: noindex, nofollow
